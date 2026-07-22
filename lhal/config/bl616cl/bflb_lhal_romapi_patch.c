@@ -288,6 +288,11 @@ static const ATTR_TCM_CONST_SECTION Flash_Info_t flash_infos[] = {
         //.name="ZB_WQ80A_08_33",
         .cfg = &flash_cfg_winb_16jv,
     },
+    {
+        .jedec_id = 0x164046,
+        //.name="xm_uh32d_32_33",
+        .cfg = &flash_cfg_winb_16jv,
+    },
 };
 
 static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_secreg_infos[] = {
@@ -298,6 +303,10 @@ static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_secreg_infos[] =
     {
         .jedec_id = 0x14345e,
         .param = flash_secreg_param_gd_le80c,
+    },
+    {
+        .jedec_id = 0x164046,
+        .param = flash_secreg_param_gd_wq32e_q128e,
     },
 };
 

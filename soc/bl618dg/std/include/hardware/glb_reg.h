@@ -9771,6 +9771,11 @@
 #define GLB_XTAL_DEG_CNT_LIMIT_LEN                              (8U)
 #define GLB_XTAL_DEG_CNT_LIMIT_MSK                              (((1U<<GLB_XTAL_DEG_CNT_LIMIT_LEN)-1)<<GLB_XTAL_DEG_CNT_LIMIT_POS)
 #define GLB_XTAL_DEG_CNT_LIMIT_UMSK                             (~(((1U<<GLB_XTAL_DEG_CNT_LIMIT_LEN)-1)<<GLB_XTAL_DEG_CNT_LIMIT_POS))
+#define GLB_TOP_MISC_XTAL_SEL                                   GLB_TOP_MISC_XTAL_SEL
+#define GLB_TOP_MISC_XTAL_SEL_POS                               (8U)
+#define GLB_TOP_MISC_XTAL_SEL_LEN                               (2U)
+#define GLB_TOP_MISC_XTAL_SEL_MSK                               (((1U<<GLB_TOP_MISC_XTAL_SEL_LEN)-1)<<GLB_TOP_MISC_XTAL_SEL_POS)
+#define GLB_TOP_MISC_XTAL_SEL_UMSK                              (~(((1U<<GLB_TOP_MISC_XTAL_SEL_LEN)-1)<<GLB_TOP_MISC_XTAL_SEL_POS))
 #define GLB_REG_RC32K_DEG_EN                                    GLB_REG_RC32K_DEG_EN
 #define GLB_REG_RC32K_DEG_EN_POS                                (13U)
 #define GLB_REG_RC32K_DEG_EN_LEN                                (1U)

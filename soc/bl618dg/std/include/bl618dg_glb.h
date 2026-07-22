@@ -2226,6 +2226,8 @@ void GLB_Set_SDU_Timing(GLB_SDU_TIMING_Type *timing);
 #endif
 BL_Err_Type GLB_Set_Slave_Bus_Protect_Enable(uint32_t slaves);
 BL_Err_Type GLB_Set_Slave_Bus_Protect_Disable(uint32_t slaves);
+BL_Err_Type GLB_Set_Top_Misc_Xtal(uint8_t sel);
+BL_Err_Type GLB_Trigger_Xtal_Cnt_32K_Process(void);
 
 /*@} end of group GLB_Public_Functions */
 

@@ -308,9 +308,6 @@ void bflb_pec_srgb_deinit(struct bflb_device_s *dev);
 /******************************************************************
 DVP_CAM
 ******************************************************************/
-#define PEC_DVP_HSYNC_SAMPLE_NONE      (0)
-#define PEC_DVP_HSYNC_SAMPLE_BEFORE    (1)
-
 struct bflb_pec_dvp_cam_s {
     uint32_t mem;               /*!< memory address of first instruction */
     uint16_t div;               /*!< divisor, N = div + 1 */
@@ -320,8 +317,7 @@ struct bflb_pec_dvp_cam_s {
     uint8_t fifo_threshold;     /*!< rx fifo threshold */
     uint8_t pixel_bits;         /*!< serial clock count of every pixel */
     uint8_t sample_dly;         /*!< delay count after sampling before checking PCLK again, in PEC clocks */
-    uint8_t hsync_dly;          /*!< delay count after HSYNC active before checking PCLK, in PEC clocks, only for PEC_DVP_HSYNC_SAMPLE_NONE */
-    uint8_t hsync_sample_mode;  /*!< PEC_DVP_HSYNC_SAMPLE_*, first bit sampling around HSYNC */
+    int16_t hsync_dly;          /*!< -1 only: sample DATA before HSYNC active; 0~255: delay after HSYNC active before checking PCLK; all other values are invalid */
     uint8_t pclk_sample_level;  /*!< physical PCLK sample level, 0: low, 1: high through input inversion */
     uint8_t vsync_active_level; /*!< 0: VSYNC active low, 1: active high */
     uint8_t hsync_active_level; /*!< 0: HSYNC active low, 1: active high */

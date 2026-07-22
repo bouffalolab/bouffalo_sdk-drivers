@@ -39,6 +39,7 @@
 #include "bl618dg_aon.h"
 #include "bl618dg_hbn.h"
 #include "bl618dg_pds.h"
+#include "bl618dg_glb.h"
 #include "bflb_ef_ctrl.h"
 
 #define  PSRAM_X8_CTRL_WAIT_TIMEOUT 1000
@@ -651,6 +652,170 @@ BL_Err_Type ATTR_CLOCK_SECTION PDS_Trim_RC32M(void)
     }
 
     return ERROR;
+}
+
+/****************************************************************************/ /**
+ * @brief  Set the RC32K-to-XTAL counter averaging window
+ *
+ * @param  cycle: XTAL_CNT_32K.reg_total_32k_cycle[22:20]
+ *                0: 4 cycles, 1: 8 cycles, 2: 16 cycles, 3: 32 cycles,
+ *                4~7: 64 cycles
+ *
+ * @return SUCCESS
+ *
+ * @note   XTAL_CNT_32K is at PDS_BASE + 0x50 (0x4000E050). This field selects
+ *         how many 32K cycles are averaged when converting RC32K to XTAL cycles.
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_TCM_SECTION PDS_Set_32K_Cycle(uint32_t cycle)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, PDS_REG_TOTAL_32K_CYCLE, cycle);
+    BL_WR_REG(PDS_BASE, PDS_XTAL_CNT_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Enable hardware RC32K counting after PDS
+ *
+ * @return SUCCESS
+ *
+ * @note   Sets XTAL_CNT_32K.cr_pds_xtal_cnt_rc32k_en[24] at
+ *         PDS_BASE + 0x50 (0x4000E050). When enabled, hardware automatically
+ *         counts RC32K against the XTAL counter after PDS.
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_TCM_SECTION PDS_Xtal_Cnt_32K_Enable(void)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_SET_REG_BIT(tmpVal, PDS_CR_PDS_XTAL_CNT_RC32K_EN);
+    BL_WR_REG(PDS_BASE, PDS_XTAL_CNT_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Disable hardware RC32K counting after PDS
+ *
+ * @return SUCCESS
+ *
+ * @note   Clears XTAL_CNT_32K.cr_pds_xtal_cnt_rc32k_en[24] at
+ *         PDS_BASE + 0x50 (0x4000E050).
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_TCM_SECTION PDS_Xtal_Cnt_32K_Disable(void)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_CLR_REG_BIT(tmpVal, PDS_CR_PDS_XTAL_CNT_RC32K_EN);
+    BL_WR_REG(PDS_BASE, PDS_XTAL_CNT_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Get RC32K-to-XTAL counter done status
+ *
+ * @return SET if XTAL_CNT_32K.xtal_cnt_32k_done[30] is set, otherwise RESET
+ *
+ * @note   The done status is read from PDS_BASE + 0x50 (0x4000E050)[30] and is
+ *         also connected to IRQ[33]. Clear it through GLB_XTAL_DEG_32K[28]
+ *         (0x40000B80[28]); the clear bit was moved out of this PDS register.
+ *
+*******************************************************************************/
+BL_Sts_Type ATTR_TCM_SECTION PDS_Xtal_Cnt_32K_Is_Done(void)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_GET_REG_BITS_VAL(tmpVal, PDS_XTAL_CNT_32K_DONE);
+
+    return tmpVal ? SET : RESET;
+}
+
+/****************************************************************************/ /**
+ * @brief  Get the RC32K-to-XTAL counter result
+ *
+ * @param  count: average 32K cycle count in XTAL cycles,
+ *                XTAL_CNT_32K.ro_xtal_cnt_32k_cnt[18:6]
+ * @param  res: residue in units of 1/64 XTAL cycle,
+ *              XTAL_CNT_32K.ro_xtal_cnt_32k_res[5:0]
+ *
+ * @return SUCCESS
+ *
+ * @note   Result fields are read from PDS_BASE + 0x50 (0x4000E050). The residue
+ *         corresponds to the averaging window selected by reg_total_32k_cycle.
+ *
+*******************************************************************************/
+BL_Err_Type PDS_Xtal_Cnt_32K_Get_Result(uint32_t *count, uint32_t *res)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    *count = BL_GET_REG_BITS_VAL(tmpVal, PDS_RO_XTAL_CNT_32K_CNT);
+    *res = BL_GET_REG_BITS_VAL(tmpVal, PDS_RO_XTAL_CNT_32K_RES);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Select top miscellaneous XTAL source
+ *
+ * @param  sel: GLB_XTAL_DEG_32K.top_misc_xtal_sel[9:8]
+ *
+ * @return SUCCESS
+ *
+*******************************************************************************/
+BL_Err_Type GLB_Set_Top_Misc_Xtal(uint8_t sel)
+{
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, GLB_TOP_MISC_XTAL_SEL, sel);
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Trigger an RC32K-to-XTAL counter process
+ *
+ * @return SUCCESS
+ *
+ * @note   The software trigger and done-clear controls were moved from
+ *         PDS XTAL_CNT_32K to GLB_XTAL_DEG_32K (0x40000B80):
+ *         [31] xtal_cnt_32k_sw_trig_ps is W1P and sets
+ *              PDS XTAL_CNT_32K.xtal_cnt_32k_process[29];
+ *         [28] clr_xtal_cnt_32k_done is W1P and clears
+ *              PDS XTAL_CNT_32K.xtal_cnt_32k_done[30];
+ *         [27] xtal_cnt_32k_cgen gates the counter clock.
+ *
+*******************************************************************************/
+BL_Err_Type GLB_Trigger_Xtal_Cnt_32K_Process(void)
+{
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal |= GLB_XTAL_CNT_32K_CGEN_MSK;
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    /* Clear the previous PDS XTAL_CNT_32K.done status through GLB bit[28]. */
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal |= GLB_CLR_XTAL_CNT_32K_DONE_MSK;
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    /* Start a new count process; GLB bit[31] drives PDS process bit[29]. */
+    tmpVal = BL_RD_REG(GLB_BASE, GLB_XTAL_DEG_32K);
+    tmpVal |= GLB_XTAL_CNT_32K_SW_TRIG_PS_MSK;
+    BL_WR_REG(GLB_BASE, GLB_XTAL_DEG_32K, tmpVal);
+
+    return SUCCESS;
 }
 
 /****************************************************************************/ /**

@@ -1285,6 +1285,115 @@ BL_Err_Type ATTR_TCM_SECTION PDS_Power_On_WB(void)
     return SUCCESS;
 }
 
+/****************************************************************************/ /**
+ * @brief  Set the RC32K-to-XTAL counter averaging window
+ *
+ * @param  cycle: XTAL_CNT_32K.reg_total_32k_cycle[22:20]
+ *                0: 4 cycles, 1: 8 cycles, 2: 16 cycles, 3: 32 cycles,
+ *                4~7: 64 cycles
+ *
+ * @return SUCCESS
+ *
+ * @note   XTAL_CNT_32K is at PDS_BASE + 0x50 (0x4000E050). This field selects
+ *         how many 32K cycles are averaged when converting RC32K to XTAL cycles.
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_TCM_SECTION PDS_Set_32K_Cycle(uint32_t cycle)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, PDS_REG_TOTAL_32K_CYCLE, cycle);
+    BL_WR_REG(PDS_BASE, PDS_XTAL_CNT_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Enable hardware RC32K counting after PDS
+ *
+ * @return SUCCESS
+ *
+ * @note   Sets XTAL_CNT_32K.cr_pds_xtal_cnt_rc32k_en[24] at
+ *         PDS_BASE + 0x50 (0x4000E050). When enabled, hardware automatically
+ *         counts RC32K against the XTAL counter after PDS.
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_TCM_SECTION PDS_Xtal_Cnt_32K_Enable(void)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_SET_REG_BIT(tmpVal, PDS_CR_PDS_XTAL_CNT_RC32K_EN);
+    BL_WR_REG(PDS_BASE, PDS_XTAL_CNT_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Disable hardware RC32K counting after PDS
+ *
+ * @return SUCCESS
+ *
+ * @note   Clears XTAL_CNT_32K.cr_pds_xtal_cnt_rc32k_en[24] at
+ *         PDS_BASE + 0x50 (0x4000E050).
+ *
+*******************************************************************************/
+BL_Err_Type ATTR_TCM_SECTION PDS_Xtal_Cnt_32K_Disable(void)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_CLR_REG_BIT(tmpVal, PDS_CR_PDS_XTAL_CNT_RC32K_EN);
+    BL_WR_REG(PDS_BASE, PDS_XTAL_CNT_32K, tmpVal);
+
+    return SUCCESS;
+}
+
+/****************************************************************************/ /**
+ * @brief  Get RC32K-to-XTAL counter done status
+ *
+ * @return SET if XTAL_CNT_32K.xtal_cnt_32k_done[30] is set, otherwise RESET
+ *
+ * @note   The done status is read from PDS_BASE + 0x50 (0x4000E050)[30] and is
+ *         also connected to IRQ[33]. Clear it through GLB_XTAL_DEG_32K[28]
+ *         (0x40000B80[28]); the clear bit was moved out of this PDS register.
+ *
+*******************************************************************************/
+BL_Sts_Type ATTR_TCM_SECTION PDS_Xtal_Cnt_32K_Is_Done(void)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    tmpVal = BL_GET_REG_BITS_VAL(tmpVal, PDS_XTAL_CNT_32K_DONE);
+
+    return tmpVal ? SET : RESET;
+}
+
+/****************************************************************************/ /**
+ * @brief  Get the RC32K-to-XTAL counter result
+ *
+ * @param  count: average 32K cycle count in XTAL cycles,
+ *                XTAL_CNT_32K.ro_xtal_cnt_32k_cnt[18:6]
+ * @param  res: residue in units of 1/64 XTAL cycle,
+ *              XTAL_CNT_32K.ro_xtal_cnt_32k_res[5:0]
+ *
+ * @return SUCCESS
+ *
+ * @note   Result fields are read from PDS_BASE + 0x50 (0x4000E050). The residue
+ *         corresponds to the averaging window selected by reg_total_32k_cycle.
+ *
+*******************************************************************************/
+BL_Err_Type PDS_Xtal_Cnt_32K_Get_Result(uint32_t *count, uint32_t *res)
+{
+    uint32_t tmpVal = 0;
+
+    tmpVal = BL_RD_REG(PDS_BASE, PDS_XTAL_CNT_32K);
+    *count = BL_GET_REG_BITS_VAL(tmpVal, PDS_RO_XTAL_CNT_32K_CNT);
+    *res = BL_GET_REG_BITS_VAL(tmpVal, PDS_RO_XTAL_CNT_32K_RES);
+    return SUCCESS;
+}
+
 /*@} end of group PDS_Public_Functions */
 
 /*@} end of group PDS */

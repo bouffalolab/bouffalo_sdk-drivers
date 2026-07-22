@@ -513,6 +513,11 @@ BL_Err_Type PDS_Trim_RC32M(void);
 BL_Err_Type PDS_Trim_USB20(void);
 BL_Err_Type PDS_Power_Off_WB(void);
 BL_Err_Type PDS_Power_On_WB(void);
+BL_Err_Type PDS_Set_32K_Cycle(uint32_t cycle);
+BL_Err_Type PDS_Xtal_Cnt_32K_Enable(void);
+BL_Err_Type PDS_Xtal_Cnt_32K_Disable(void);
+BL_Sts_Type PDS_Xtal_Cnt_32K_Is_Done(void);
+BL_Err_Type PDS_Xtal_Cnt_32K_Get_Result(uint32_t *count, uint32_t *res);
 /*----------*/
 BL_Err_Type PDS_Turn_On_USB(uint8_t waitReady);
 BL_Err_Type PDS_Turn_Off_USB(void);
