@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "bl618dg_xip_recovery.h"
 #include "bl618dg_psram_recovery.h"
+#include "lpfw_custom_rx.h"
 #include <stdbool.h>
 
 typedef int (*bl_lp_cb_t)(void *arg);
@@ -310,6 +311,9 @@ typedef struct {
 
     lp_fw_time_debug_t *time_debug;
 
+    /* Optional APP-owned Custom RX configuration in retained no-cache RAM. */
+    lp_fw_custom_rx_cfg_t *custom_rx_parameter;
+
     /* The parameter that remains after the reset, it has to be at the back */
     struct {
         /* reset reason */
@@ -389,6 +393,11 @@ void bl_lp_time_info_update_pds(struct bl_lp_info_s *lp_info);
 void bl_lp_time_info_update_lpfw(struct bl_lp_info_s *lp_info);
 /* user api */
 void bl_lp_info_clear(struct bl_lp_info_s *lp_info);
+
+#if defined(CONFIG_LPFW_CUSTOM_RX)
+int bl_lp_custom_rx_config_set(lp_fw_custom_rx_cfg_t *cfg);
+lp_fw_custom_rx_cfg_t *bl_lp_custom_rx_config_get(void);
+#endif
 
 void bl_lp_rc32k_save_code(uint32_t code);
 

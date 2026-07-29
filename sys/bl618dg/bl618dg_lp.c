@@ -56,7 +56,7 @@ static void ATTR_TCM_SECTION bl_lp_all_irq_disable(void)
 
 #define CHECK_IOT2LP_POINTER(field)                       \
     if (para->field == NULL) {                            \
-        BL_LP_LOG("iot2lp_para->"#field" is NULL\r\n");   \
+        BL_LP_LOG("iot2lp_para->" #field " is NULL\r\n"); \
         return -1;                                        \
     }
 
@@ -91,14 +91,17 @@ static int bl_lp_check_iot2lp_para_pointers(iot2lp_para_t *para)
 
 void bl_lp_wifi_param_update(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
 {
+    iot2lp_para->wifi_parameter->wifi_rx_buff = (uint8_t *)((uint32_t)export_get_rx_buffer1_addr() & 0x2FFFFFFF);
+
     if (bl_lp_fw_cfg->tim_wakeup_en) {
+        iot2lp_para->wifi_parameter->buf_addr = bl_lp_fw_cfg->buf_addr;
+        iot2lp_para->wifi_parameter->pack_env = bl_lp_fw_cfg->pack_env;
         iot2lp_para->wifi_parameter->tim_wakeup_en = 1;
         memcpy(iot2lp_para->wifi_parameter->bssid, bl_lp_fw_cfg->bssid, 6);
         memcpy(iot2lp_para->wifi_parameter->local_mac, bl_lp_fw_cfg->mac, 6);
         iot2lp_para->wifi_parameter->ap_channel = bl_lp_fw_cfg->channel;
         iot2lp_para->wifi_parameter->aid = bl_lp_fw_cfg->aid;
         iot2lp_para->wifi_parameter->bcn_target_level = bl_lp_fw_cfg->rssi;
-        iot2lp_para->wifi_parameter->wifi_rx_buff = (uint8_t *)((uint32_t)export_get_rx_buffer1_addr() & 0x2FFFFFFF);
 
         /* lpfw rx timeout */
         iot2lp_para->mtimer_parameter->mtimer_timeout_en = 1;
@@ -126,6 +129,24 @@ void bl_lp_wifi_param_update(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
         iot2lp_para->wifi_parameter->tim_wakeup_en = 0;
     }
 }
+
+#if defined(CONFIG_LPFW_CUSTOM_RX)
+int bl_lp_custom_rx_config_set(lp_fw_custom_rx_cfg_t *cfg)
+{
+    if (cfg != NULL && !lp_fw_custom_rx_cfg_is_valid(cfg)) {
+        return -1;
+    }
+
+    iot2lp_para->custom_rx_parameter = cfg;
+
+    return 0;
+}
+
+lp_fw_custom_rx_cfg_t *bl_lp_custom_rx_config_get(void)
+{
+    return iot2lp_para->custom_rx_parameter;
+}
+#endif
 
 #if 0
 static void bl_lp_print_wifi_param(void)
@@ -557,6 +578,28 @@ static uint32_t get_dtim_num(uint32_t period_dtim, uint32_t bcn_past_num, lp_fw_
     return dtim_num;
 }
 
+#if defined(CONFIG_LPFW_CUSTOM_RX)
+static uint32_t ATTR_TCM_SECTION bl_lp_custom_rx_sleep_us(lp_fw_custom_rx_cfg_t *cfg, uint64_t rtc_cnt)
+{
+    uint64_t sleep_cnt;
+
+    if (cfg->next_wakeup_rtc_cnt == 0u || cfg->next_wakeup_rtc_cnt <= rtc_cnt) {
+        sleep_cnt = PDS_WARMUP_LATENCY_CNT + 2u;
+    } else {
+        sleep_cnt = cfg->next_wakeup_rtc_cnt - rtc_cnt;
+        if (sleep_cnt <= PDS_WARMUP_LATENCY_CNT + 1u) {
+            sleep_cnt = PDS_WARMUP_LATENCY_CNT + 2u;
+        }
+    }
+
+    if (sleep_cnt > UINT32_MAX) {
+        sleep_cnt = UINT32_MAX;
+    }
+
+    return BL_PDS_CNT_TO_US((uint32_t)sleep_cnt);
+}
+#endif
+
 int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
 {
     uint64_t rtc_sleep_us, rtc_wakeup_cmp_cnt;
@@ -567,6 +610,10 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
     uint32_t period_dtim;
     uint32_t bcn_loss_level;
     int32_t rtc32k_error_us;
+    bool pds_timer_enabled;
+#if defined(CONFIG_LPFW_CUSTOM_RX)
+    bool custom_rx_enabled;
+#endif
 
     lp_fw_bcn_loss_level_t *bcn_loss_cfg = NULL;
 
@@ -642,6 +689,13 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
 
     rtc_wakeup_cmp_cnt = bl_lp_fw_cfg->rtc_wakeup_cmp_cnt;
     rtc_sleep_us = bl_lp_fw_cfg->rtc_timeout_us;
+    pds_timer_enabled = bl_lp_fw_cfg->tim_wakeup_en != 0u;
+
+#if defined(CONFIG_LPFW_CUSTOM_RX)
+    custom_rx_enabled = !bl_lp_fw_cfg->tim_wakeup_en &&
+                        lp_fw_custom_rx_cfg_is_valid(iot2lp_para->custom_rx_parameter);
+    pds_timer_enabled = pds_timer_enabled || custom_rx_enabled;
+#endif
 
     if (bl_lp_fw_cfg->tim_wakeup_en) {
         /* last beacon timestamp */
@@ -696,7 +750,13 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
         } else {
             pds_sleep_us = 0;
         }
-    } else {
+    }
+#if defined(CONFIG_LPFW_CUSTOM_RX)
+    else if (custom_rx_enabled) {
+        pds_sleep_us = bl_lp_custom_rx_sleep_us(iot2lp_para->custom_rx_parameter, rtc_cnt);
+    }
+#endif
+    else {
         pds_sleep_us = 0;
     }
 
@@ -704,9 +764,8 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
         rtc_sleep_us = ((uint64_t)24 * 60 * 60 * 1000 * 1000);
     }
 
-    /* Prevent rtc from colliding with pds */
-    if (rtc_wakeup_cmp_cnt == 0 && rtc_sleep_us) {
-        /*  */
+    /* Back off a relative RTC wakeup that is too close to a periodic PDS timer. */
+    if (pds_timer_enabled && rtc_wakeup_cmp_cnt == 0 && rtc_sleep_us) {
         if (((pds_sleep_us >= rtc_sleep_us) && (pds_sleep_us - rtc_sleep_us) < PROTECT_BF_MS * 1000) ||
             ((pds_sleep_us <= rtc_sleep_us) && (rtc_sleep_us - pds_sleep_us) < PROTECT_AF_MS * 1000)) {
             /* Advance the RTC time */
@@ -762,7 +821,7 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
             BL_WR_REG(HBN_BASE, HBN_CTL, tmpVal);
         }
 
-        if (bl_lp_fw_cfg->tim_wakeup_en) {
+        if (pds_timer_enabled) {
             /* pds15 enter */
             pm_pds_mode_enter(PM_PDS_LEVEL_15, BL_US_TO_PDS_CNT(pds_sleep_us));
         } else {
@@ -843,14 +902,14 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
     if ((iot2lp_para->wakeup_reason_info->wakeup_reason & LPFW_WAKEUP_IO)) {
         for (uint8_t i = HBN_INT_GPIO0; i <= HBN_INT_GPIO7; i++) {
             if (SET == HBN_Get_INT_State(i)) {
-                BL_LP_LOG("[E] gpio %d\r\n",i);
+                BL_LP_LOG("[E] gpio %d\r\n", i);
                 // iot2lp_para->wakeup_reason_info->wakeup_io_bits |= ((uint64_t)1<<i);
                 HBN_Clear_IRQ(i);
             }
         }
         for (uint32_t i = 8; i < BL_LP_WAKEUP_IO_MAX_NUM; i++) {
             if (PDS_Get_GPIO_Pad_IntStatus(i)) {
-                BL_LP_LOG("[E] gpio %d\r\n",i);
+                BL_LP_LOG("[E] gpio %d\r\n", i);
                 // iot2lp_para->wakeup_reason_info->wakeup_io_bits |= ((uint64_t)1<<i);
                 PDS_Set_GPIO_Pad_IntClr(i);
             }
