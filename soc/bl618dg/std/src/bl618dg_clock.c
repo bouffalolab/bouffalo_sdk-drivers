@@ -98,7 +98,10 @@ static uint32_t ATTR_CLOCK_SECTION Clock_Get_CPUPLL_Output(CLOCK_CPUPLL_Type Typ
     refdiv = BL_GET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_REFCLK_DIV_RATIO);
     tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_SDM1_OFFSET);
     sdmin = BL_GET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_SDM_IN);
-    float vco_float = (float)sdmin / 2048.0f * ((float)xtal_value / (float)refdiv);
+
+    volatile uint32_t vco_divisor_value = 2048U;
+    volatile float vco_divisor = (float)vco_divisor_value;
+    float vco_float = (float)sdmin / vco_divisor * ((float)xtal_value / (float)refdiv);
     vcoFreq = (uint32_t)vco_float;
 
     switch (Type) {

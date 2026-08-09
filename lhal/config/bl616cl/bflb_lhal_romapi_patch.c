@@ -259,8 +259,8 @@ static const ATTR_TCM_CONST_SECTION spi_flash_cfg_type flash_cfg_issi_25lp256 = 
     .write_vreg_enable_cmd = 0x00,
 
     /* qpi mode */
-    .enter_qpi = 0x38,
-    .exit_qpi = 0xff,
+    .enter_qpi = 0x35,
+    .exit_qpi = 0xf5,
 
     /*AC*/
     .time_e_sector = 300,

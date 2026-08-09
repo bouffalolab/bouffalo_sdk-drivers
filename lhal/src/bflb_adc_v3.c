@@ -17,7 +17,6 @@ volatile uint32_t tsen_offset = 2400;
 #else
 volatile uint32_t tsen_offset = 0;
 #endif
-volatile int adc_reference_channel = -1;
 
 __UNUSED static int bflb_adc_fifo1_is_enabled(void)
 {
@@ -110,7 +109,7 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
     putreg32(regval, reg_base + AON_GPADC1_REG_CONFIG2_OFFSET);
 
     regval = 0;
-    regval |= (3 << AON_GPADC1_PGA_VCM_SHIFT); /* 0.9V */
+    regval |= (3 << AON_GPADC1_PGA_VCM_SHIFT);  /* 0.9V */
     regval |= (1 << AON_GPADC1_PGA_GAIN_SHIFT); /* gain 1 */
     regval |= AON_GPADC1_PGA_EN;
     if (config->resolution == ADC_RESOLUTION_12B) {
@@ -146,7 +145,7 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
     putreg32(regval, reg_base + AON_GPADC1_REG_CONFIG2_OFFSET);
 
     regval = 0;
-    regval |= (config->resolution << AON_GPADC1_RES_SEL_SHIFT);    /* resolution */
+    regval |= (config->resolution << AON_GPADC1_RES_SEL_SHIFT); /* resolution */
     if (config->scan_conv_mode) {
         regval |= AON_GPADC1_SCAN_EN;
     }
@@ -177,6 +176,21 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
 
     offset[dev->idx] = bflb_efuse_get_adc_offset_trim(dev);
     coe[dev->idx] = bflb_efuse_get_adc_gain_trim(dev);
+#if !defined(CPU_MODEL_A0)
+    if (dev->idx == 0) {
+        tsen_offset = bflb_efuse_get_adc_tsen_trim();
+
+        regval = getreg32(reg_base + AON_GPADC_REG_CMD1_OFFSET);
+        regval |= AON_GPADC_TS_EN;
+        regval |= AON_GPADC_TSVBE_LOW;
+        regval &= ~AON_GPADC_TSEXT_SEL;
+        putreg32(regval, reg_base + AON_GPADC_REG_CMD1_OFFSET);
+
+        regval = getreg32(reg_base + AON_GPADC1_REG_RAW_DATA_OFFSET);
+        regval |= (1U << (AON_GPADC1_RESERVED_SHIFT + 1));
+        putreg32(regval, reg_base + AON_GPADC1_REG_RAW_DATA_OFFSET);
+    }
+#endif
 #endif
 }
 
@@ -1029,134 +1043,13 @@ void bflb_adc_parse_result(struct bflb_device_s *dev, uint32_t *buffer, struct b
 #endif
 }
 
-void bflb_adc_tsen_init(struct bflb_device_s *dev, uint8_t tsen_mod)
+float bflb_adc_tsen_raw_to_temperature(struct bflb_device_s *dev, uint32_t rawdata_P, uint32_t rawdata_N)
 {
-#ifdef romapi_bflb_adc_tsen_init
-    romapi_bflb_adc_tsen_init(dev, tsen_mod);
-#else
-    uint32_t regval;
-    uint32_t reg_base;
+    float delta;
 
-    reg_base = dev->reg_base;
-
-    if (dev->idx != 0) {
-        return;
-    }
-
-    regval = getreg32(reg_base + AON_GPADC_REG_CMD1_OFFSET);
-    regval |= AON_GPADC_TS_EN;
-    regval &= ~AON_GPADC_TSVBE_LOW;
-    if (tsen_mod) {
-        regval |= AON_GPADC_TSEXT_SEL;
-    } else {
-        regval &= ~AON_GPADC_TSEXT_SEL;
-    }
-    putreg32(regval, reg_base + AON_GPADC_REG_CMD1_OFFSET);
-
-    regval = getreg32(reg_base + AON_GPADC1_REG_CONFIG1_OFFSET);
-    regval &= ~AON_GPADC1_PGA_VCMI_EN;
-    regval &= ~AON_GPADC1_CHOP_MODE_MASK;
-    regval |= (1 << AON_GPADC1_CHOP_MODE_SHIFT); /* Vref AZ */
-    regval &= ~AON_GPADC1_PGA_VCM_MASK;
-    regval |= (1 << AON_GPADC1_PGA_VCM_SHIFT);
-    putreg32(regval, reg_base + AON_GPADC1_REG_CONFIG1_OFFSET);
-
-    regval = getreg32(reg_base + AON_GPADC1_REG_CONFIG2_OFFSET);
-    regval |= AON_GPADC1_DWA_EN;
-    regval &= ~AON_GPADC1_DLY_SEL_MASK;
-    regval |= (2 << AON_GPADC1_DLY_SEL_SHIFT);
-    regval |= AON_GPADC1_DITHER_EN;
-    putreg32(regval, reg_base + AON_GPADC1_REG_CONFIG2_OFFSET);
-#endif
-}
-
-float bflb_adc_tsen_get_temp(struct bflb_device_s *dev)
-{
-#ifdef romapi_bflb_adc_tsen_get_temp
-    return romapi_bflb_adc_tsen_get_temp(dev);
-#else
-    uint32_t regval;
-    uint32_t reg_base;
-    uint32_t v0 = 0, v1 = 0;
-    float temp = 0;
-    uint32_t raw_data;
-    uint64_t start_time;
-    uint32_t sum;
-
-    reg_base = dev->reg_base;
-
-    regval = getreg32(ADC_GPIP_BASE + GPIP_GPADC_CONFIG_OFFSET);
-    regval |= GPIP_GPADC_FIFO_CLR;
-    putreg32(regval, ADC_GPIP_BASE + GPIP_GPADC_CONFIG_OFFSET);
-
-    regval = getreg32(reg_base + AON_GPADC_REG_CMD1_OFFSET);
-    regval &= ~AON_GPADC_TSVBE_LOW;
-    putreg32(regval, reg_base + AON_GPADC_REG_CMD1_OFFSET);
-
-    sum = 0;
-    bflb_adc_start_conversion(dev);
-    for (int i = 0; i < 8; i++) {
-        start_time = bflb_mtimer_get_time_ms();
-        while (bflb_adc_get_count(dev) == 0) {
-            if ((bflb_mtimer_get_time_ms() - start_time) > 100) {
-                return -ETIMEDOUT;
-            }
-        }
-        bflb_adc_read_raw(dev);
-    }
-    for (int i = 0; i < 16; i++) {
-        start_time = bflb_mtimer_get_time_ms();
-        while (bflb_adc_get_count(dev) == 0) {
-            if ((bflb_mtimer_get_time_ms() - start_time) > 100) {
-                return -ETIMEDOUT;
-            }
-        }
-        raw_data = bflb_adc_read_raw(dev);
-        sum += (raw_data & 0xFFFF);
-    }
-    bflb_adc_stop_conversion(dev);
-    v0 = (sum + 8) / 16;
-
-    regval = getreg32(ADC_GPIP_BASE + GPIP_GPADC_CONFIG_OFFSET);
-    regval |= GPIP_GPADC_FIFO_CLR;
-    putreg32(regval, ADC_GPIP_BASE + GPIP_GPADC_CONFIG_OFFSET);
-
-    regval = getreg32(reg_base + AON_GPADC_REG_CMD1_OFFSET);
-    regval |= AON_GPADC_TSVBE_LOW;
-    putreg32(regval, reg_base + AON_GPADC_REG_CMD1_OFFSET);
-
-    sum = 0;
-    bflb_adc_start_conversion(dev);
-    for (int i = 0; i < 8; i++) {
-        start_time = bflb_mtimer_get_time_ms();
-        while (bflb_adc_get_count(dev) == 0) {
-            if ((bflb_mtimer_get_time_ms() - start_time) > 100) {
-                return -ETIMEDOUT;
-            }
-        }
-        bflb_adc_read_raw(dev);
-    }
-    for (int i = 0; i < 16; i++) {
-        start_time = bflb_mtimer_get_time_ms();
-        while (bflb_adc_get_count(dev) == 0) {
-            if ((bflb_mtimer_get_time_ms() - start_time) > 100) {
-                return -ETIMEDOUT;
-            }
-        }
-        raw_data = bflb_adc_read_raw(dev);
-        sum += (raw_data & 0xFFFF);
-    }
-    bflb_adc_stop_conversion(dev);
-    v1 = (sum + 8) / 16;
-
-    if (v0 > v1) {
-        temp = (((float)v0 - (float)v1) - (float)tsen_offset) / 9.2f;
-    } else {
-        temp = (((float)v1 - (float)v0) - (float)tsen_offset) / 9.2f;
-    }
-
-    return temp;
-#endif
+    delta = ((float)(rawdata_N & 0xFFFF) - (float)(rawdata_P & 0xFFFF)) / coe[dev->idx];
+    delta = (delta >= 0.0f) ? delta : -delta;
+    return (delta - (float)tsen_offset) / 8.648f;
 }
 
 void bflb_adc_watchdog_init(struct bflb_device_s *dev, struct bflb_adc_watchdog_config_s *config)
@@ -1224,6 +1117,25 @@ int bflb_adc_feature_control(struct bflb_device_s *dev, int cmd, size_t arg)
                 putreg32(regval, ADC_AON_BASE + AON_GPADC_REG_CMD1_OFFSET);
             }
             break;
+        case ADC_CMD_TSEN_EN:
+            if (dev->idx == 0) {
+                regval = getreg32(reg_base + AON_GPADC_REG_CMD1_OFFSET);
+                if (arg) {
+                    regval |= (AON_GPADC_TS_EN | AON_GPADC_TSVBE_LOW);
+                } else {
+                    regval &= ~(AON_GPADC_TS_EN | AON_GPADC_TSVBE_LOW);
+                }
+                putreg32(regval, reg_base + AON_GPADC_REG_CMD1_OFFSET);
+
+                regval = getreg32(reg_base + AON_GPADC1_REG_RAW_DATA_OFFSET);
+                if (arg) {
+                    regval |= (1U << (AON_GPADC1_RESERVED_SHIFT + 1));
+                } else {
+                    regval &= ~(1U << (AON_GPADC1_RESERVED_SHIFT + 1));
+                }
+                putreg32(regval, reg_base + AON_GPADC1_REG_RAW_DATA_OFFSET);
+            }
+            break;
         case ADC_CMD_REGULAR_DATA_SHIFT:
             regval = getreg32(ADC_GPIP_BASE + GPIP_GPADC_PRE_PROC_OFFSET);
             regval &= ~GPIP_GPADC_RGLR_DATA_SHIFT_MASK;
@@ -1265,7 +1177,7 @@ int bflb_adc_feature_control(struct bflb_device_s *dev, int cmd, size_t arg)
             }
             break;
         case ADC_CMD_SET_OFFSET_CALI:
-        /*adc os_cal_offset change, arg is offset value, pos value is down offset, neg value is up offset*/
+            /*adc os_cal_offset change, arg is offset value, pos value is down offset, neg value is up offset*/
             regval = getreg32(reg_base + AON_GPADC1_REG_OS_CAL_DATA_OFFSET);
             regval &= ~AON_GPADC1_OS_CAL_DATA_MASK;
             regval |= ((uint32_t)(arg) << AON_GPADC1_OS_CAL_DATA_SHIFT) & AON_GPADC1_OS_CAL_DATA_MASK;

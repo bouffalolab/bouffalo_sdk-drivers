@@ -3384,13 +3384,13 @@ int bflb_emac_init(struct bflb_device_s *dev, const struct bflb_emac_config_s *c
         }
     } else {
         if (dev->idx == 0) {
-            regval |= (1 << 4);  /* 0:not invert refclk,1:invert refclk */
+            regval &= ~(1 << 4);  /* 0:not invert refclk,1:invert refclk */
             regval &= ~(1 << 5); /* 0: ref_clk in mode */
             regval &= ~(1 << 6); /* if [5] = 1, set this bit to 1 will invert the clock to RMII PHY1 */
             regval &= ~(1 << 7); /* Invert clock to our RMII MAC1 TX */
             regval &= ~(1 << 8); /* Invert clock to our RMII MAC1 RX */
         } else {
-            regval |= (1 << 16);  /* 0:not invert refclk,1:invert refclk */
+            regval &= ~(1 << 16);  /* 0:not invert refclk,1:invert refclk */
             regval &= ~(1 << 17); /* 0: ref_clk in mode */
             regval &= ~(1 << 18); /* if [5] = 1, set this bit to 1 will invert the clock to RMII PHY1 */
             regval &= ~(1 << 19); /* Invert clock to our RMII MAC1 TX */

@@ -1938,7 +1938,8 @@ void ATTR_CLOCK_SECTION GLB_Set_WIFIPLL_Fine_Tune(void)
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_DITH_FORCE_EN, 0);/* [23]  = 0 */
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_DITH_EN, 0);      /* [22]  = 0 */
     BL_WR_WORD(RF_BASE + RF_ANA1_WIFIPLL_PI_SDM_LMS_OFFSET, tmpVal);
-#else
+#endif
+#if 0
     /* WIFIPLL HW CTRL @ 0x200010D4 */
     tmpVal = BL_RD_WORD(CCI_BASE + CCI_WIFIPLL_HW_CTRL_OFFSET);
     tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_VCO_RSHT_EN_TX_BZ, 0);/* [16]  = 0 */

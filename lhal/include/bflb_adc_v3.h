@@ -198,6 +198,7 @@
 #define ADC_CMD_PWM_TRIG_EN        (0x05)
 #define ADC_CMD_SET_FIFO_THRESHOLD (0x06)
 #define ADC_CMD_SET_OFFSET_CALI    (0x07)
+#define ADC_CMD_TSEN_EN            (0x08)
 /**
   * @}
   */
@@ -573,20 +574,14 @@ void bflb_adc_int_fifo_clear(struct bflb_device_s *dev, uint32_t int_type);
 void bflb_adc_parse_result(struct bflb_device_s *dev, uint32_t *buffer, struct bflb_adc_result_s *result, uint16_t count);
 
 /**
- * @brief Initialize adc temperature sensor
+ * @brief Calculate adc temperature from TSEN_N and TSEN_P raw words.
  *
  * @param [in] dev device handle
- * @param [in] tsen_mod temperature sensor mode, use @ref ADC_TSEN_MOD
- */
-void bflb_adc_tsen_init(struct bflb_device_s *dev, uint8_t tsen_mod);
-
-/**
- * @brief Get adc temperature
- *
- * @param [in] dev device handle
+ * @param [in] rawdata_P raw word from ADC0_INTERNAL_CHANNEL_TSEN_P
+ * @param [in] rawdata_N raw word from ADC0_INTERNAL_CHANNEL_TSEN_N
  * @return temperature
  */
-float bflb_adc_tsen_get_temp(struct bflb_device_s *dev);
+float bflb_adc_tsen_raw_to_temperature(struct bflb_device_s *dev, uint32_t rawdata_P, uint32_t rawdata_N);
 
 /**
  * @brief Initialize adc watch dog.

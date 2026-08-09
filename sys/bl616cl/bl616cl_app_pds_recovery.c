@@ -47,6 +47,7 @@ static ATTR_NOCACHE_RAM_SECTION bl_lp_uart_snapshot_t pds_resume_uart_cfg = {
 };
 #endif
 static ATTR_NOCACHE_RAM_SECTION bl_lp_peripheral_clock_snapshot_t pds_resume_peripheral_clock_cfg = { 0 };
+static ATTR_NOCACHE_RAM_SECTION PM_LOWPOWER_CFG_Type pds_resume_lowpower_cfg;
 
 static void ATTR_TCM_SECTION pds_gpio_keep_enable(uint32_t sf_pin_select);
 static void ATTR_TCM_SECTION bl_lp_runtime_gpio_snapshot(void);
@@ -216,9 +217,9 @@ static void ATTR_TCM_SECTION pds_wakeup_recover(void)
 #endif
     );
 
-#if PM_PDS_LDO18IO_POWER_DOWN
-    GLB_Power_Up_Ldo18ioVout();
-#endif
+    if (pds_resume_lowpower_cfg.lp_cfg.ldo18io_power_down) {
+        GLB_Power_Up_Ldo18ioVout();
+    }
 
     AON_LDO18_IO_Switch_Flash(1);
 
@@ -353,12 +354,19 @@ static uint32_t ATTR_TCM_SECTION get_sf_pin_select(void)
     return (tmpVal >> 5) & 0x3f;
 }
 
-int ATTR_TCM_SECTION bl_lp_pds_enter_with_restore(uint32_t pds_level, uint32_t sleep_time)
+int ATTR_TCM_SECTION bl_lp_pds_enter_with_restore(uint32_t pds_level, uint32_t sleep_time,
+                                                  const PM_LOWPOWER_CFG_Type *lowpower_cfg)
 {
     uintptr_t irq_flag;
     volatile bool enter_flag = true;
     uint32_t sf_pin_select;
     int ret = 0;
+
+    if (lowpower_cfg == NULL) {
+        return -1;
+    }
+
+    pds_resume_lowpower_cfg = *lowpower_cfg;
 
 #if (BL_LP_TIME_DEBUG)
     memset(time_debug_buff, 0, sizeof(time_debug_buff));
@@ -407,7 +415,7 @@ int ATTR_TCM_SECTION bl_lp_pds_enter_with_restore(uint32_t pds_level, uint32_t s
 #endif
 
         bl_lp_debug_record_time(iot2lp_para, "pds enter end");
-        pm_pds_mode_enter(pds_level, sleep_time);
+        pm_pds_mode_enter(pds_level, sleep_time, &pds_resume_lowpower_cfg);
     }
 
     bl_lp_debug_record_time(iot2lp_para, "pds exit");

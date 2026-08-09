@@ -14,9 +14,94 @@ static volatile int32_t adc_os1;
 static volatile int32_t adc_dth;
 static volatile int adc_cali_complete = 0;
 
+enum bflb_adc_init_state {
+    ADC_INIT_STATE_UNINIT = 0,
+    ADC_INIT_STATE_INITIALIZING,
+    ADC_INIT_STATE_READY,
+};
+
+static volatile uint8_t adc_init_state;
+static volatile uint8_t adc_inject_context_owned;
+static uint32_t adc_inject_context_token;
+
+#define ADC_CONTEXT_CMD1_MASK (GLB_GPADC_TS_EN | GLB_GPADC_TSVBE_LOW | GLB_GPADC_TSEXT_SEL | GLB_GPADC_INT_NEG_SEL_MASK | GLB_GPADC_INT_POS_SEL_MASK)
+
+#define ADC_CONTEXT_CONFIG1_MASK \
+    (GLB_GPADC1_VREF_EX_SEL | GLB_GPADC1_DIFF_MODE | GLB_GPADC1_NEG_GND | GLB_GPADC1_CHOP_MODE_MASK | GLB_GPADC1_INT_INSERT_LEN_MASK | GLB_GPADC1_EXT_INSERT_LEN_MASK | GLB_GPADC1_INT_EXT_INSERT_SEL)
+
+#define ADC_CONTEXT_CONFIG2_MASK (GLB_GPADC1_CONT_CONV_EN | GLB_GPADC1_SCN_EN | GLB_GPADC1_SCN_LOOP_EN | GLB_GPADC1_RES_SEL_MASK)
+
+#define ADC_CONTEXT_STATUS_MASK  (1U << GLB_GPADC1_RESERVED_SHIFT)
+
+#define ADC_CONTEXT_GPIP2_MASK   (GPIP_GPADC_DMA_EN | GPIP_GPADC_RDY_MASK | GPIP_GPADC_FIFO_OVERRUN_MASK | GPIP_GPADC_FIFO_UNDERRUN_MASK | GPIP_GPADC_FIFO_THL_MASK | GPIP_GPADC_INT_RDY_NUM_MASK)
+
+static void bflb_adc_apply_config(struct bflb_device_s *dev, const struct bflb_adc_config_s *config)
+{
+    uint32_t regval;
+    uint32_t reg_base = dev->reg_base;
+
+    regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG1_OFFSET);
+    regval &= ~(GLB_GPADC1_VREF_EX_SEL | GLB_GPADC1_DIFF_MODE | GLB_GPADC1_NEG_GND | GLB_GPADC1_CHOP_MODE_MASK);
+    if (config->vref == ADC_VREF_EXTERNAL_1P25) {
+        regval |= GLB_GPADC1_VREF_EX_SEL;
+    }
+    if (config->differential_mode) {
+        regval |= GLB_GPADC1_DIFF_MODE;
+    } else {
+        regval |= GLB_GPADC1_NEG_GND;
+    }
+    if (config->resolution == ADC_RESOLUTION_12B) {
+        regval |= (1 << GLB_GPADC1_CHOP_MODE_SHIFT);
+    } else {
+        regval |= (2 << GLB_GPADC1_CHOP_MODE_SHIFT);
+    }
+    putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG1_OFFSET);
+
+    regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+    regval &= ~(GLB_GPADC1_RES_SEL_MASK | GLB_GPADC1_SCN_LOOP_EN | GLB_GPADC1_SCN_EN | GLB_GPADC1_CONT_CONV_EN);
+    regval |= (config->resolution << GLB_GPADC1_RES_SEL_SHIFT);
+    if (config->scan_conv_mode) {
+        regval |= GLB_GPADC1_SCN_EN;
+        if (config->continuous_conv_mode) {
+            regval |= GLB_GPADC1_SCN_LOOP_EN;
+        }
+    } else if (config->continuous_conv_mode) {
+        regval |= GLB_GPADC1_CONT_CONV_EN;
+    }
+    putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+}
+
+static void bflb_adc_restore_reg(uint32_t addr, uint32_t saved_value, uint32_t mask)
+{
+    uint32_t regval;
+
+    regval = getreg32(addr);
+    regval &= ~mask;
+    regval |= saved_value & mask;
+    putreg32(regval, addr);
+}
+
+static void bflb_adc_init_complete(void)
+{
+    uintptr_t irq_state;
+
+    irq_state = bflb_irq_save();
+    adc_init_state = ADC_INIT_STATE_READY;
+    bflb_irq_restore(irq_state);
+}
+
+static void bflb_adc_reset_state(void)
+{
+    uintptr_t irq_state;
+
+    irq_state = bflb_irq_save();
+    adc_init_state = ADC_INIT_STATE_UNINIT;
+    adc_inject_context_owned = 0;
+    bflb_irq_restore(irq_state);
+}
+
 static int32_t bflb_adc_get_internal_gnd_data(struct bflb_device_s *dev)
 {
-#if 0
     struct bflb_adc_channel_s chan;
     uint32_t raw_data;
     uint32_t sum;
@@ -59,14 +144,10 @@ static int32_t bflb_adc_get_internal_gnd_data(struct bflb_device_s *dev)
         }
     }
     return data_gnd_final;
-#else
-    return 0;
-#endif
 }
 
 static int32_t bflb_adc_get_internal_20mv_data(struct bflb_device_s *dev)
 {
-#if 0
     struct bflb_adc_channel_s chan;
     uint32_t regval;
     uint32_t raw_data;
@@ -76,23 +157,23 @@ static int32_t bflb_adc_get_internal_20mv_data(struct bflb_device_s *dev)
 
     /* Register: mix_rf_pucr @ 0x20001000 + 0x28, bit[0] = pu_mbg_en */
     regval = getreg32(ADC_MIX_BASE + 0x28);
-    regval |= (1U << 0);  /* pu_mbg_en: power up main bandgap */
+    regval |= (1U << 0); /* pu_mbg_en: power up main bandgap */
     putreg32(regval, ADC_MIX_BASE + 0x28);
 
     /* Register: mix_rf_ten @ 0x20001000 + 0x40
      *   bit[7]  = rf_ten_cip_en: enable internal test path
      *   bit[23] = rf_dc_tp_33_int_en: enable DC test point for 20mV generation */
     regval = getreg32(ADC_MIX_BASE + 0x40);
-    regval |= (1U << 7);   /* rf_ten_cip_en */
-    regval |= (1U << 23);  /* rf_dc_tp_33_int_en */
+    regval |= (1U << 7);  /* rf_ten_cip_en */
+    regval |= (1U << 23); /* rf_dc_tp_33_int_en */
     putreg32(regval, ADC_MIX_BASE + 0x40);
 
     /* Select 20mV test channel via AON test mux
      * Register: adc_aon_ten @ 0x2000f000 + 0x824, bit[2:0] = tmux_aon_sel
      * Value 5 selects the internal 20mV test path */
     regval = getreg32(ADC_HBN_BASE + 0x824);
-    regval &= ~0x07U;  /* clear bit[2:0] */
-    regval |= 0x05U;   /* tmux_aon_sel = 5: 20mV test path */
+    regval &= ~0x07U; /* clear bit[2:0] */
+    regval |= 0x05U;  /* tmux_aon_sel = 5: 20mV test path */
     putreg32(regval, ADC_HBN_BASE + 0x824);
 
     chan.pos_chan = ADC_INTERNAL_CHANNEL_MAIN_BG;
@@ -128,16 +209,12 @@ static int32_t bflb_adc_get_internal_20mv_data(struct bflb_device_s *dev)
         data_20mv_final = (int32_t)(((int32_t)raw_data - offset * 2) / coe);
     }
     return data_20mv_final;
-#else
-    return 0;
-#endif
 }
 
-void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *config)
+int bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *config)
 {
-#ifdef romapi_bflb_adc_init
-    romapi_bflb_adc_init(dev, config);
-#else
+    uintptr_t irq_state;
+    bool reconfigure_only;
     uint32_t regval;
     uint32_t reg_base;
 
@@ -145,8 +222,25 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
     LHAL_PARAM_ASSERT(IS_ADC_RESOLUTION(config->resolution));
     LHAL_PARAM_ASSERT(IS_ADC_VREF(config->vref));
 
-    reg_base = dev->reg_base;
+    irq_state = bflb_irq_save();
+    if (adc_init_state == ADC_INIT_STATE_INITIALIZING) {
+        bflb_irq_restore(irq_state);
+        return -EBUSY;
+    }
 
+    reconfigure_only = (adc_init_state == ADC_INIT_STATE_READY) && ((getreg32(dev->reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET) & GLB_GPADC1_GLOBAL_EN) != 0);
+    adc_init_state = ADC_INIT_STATE_INITIALIZING;
+    bflb_irq_restore(irq_state);
+
+    if (reconfigure_only) {
+        bflb_adc_apply_config(dev, config);
+        bflb_adc_init_complete();
+        return 0;
+    }
+#ifdef romapi_bflb_adc_init
+    romapi_bflb_adc_init(dev, config);
+#else
+    reg_base = dev->reg_base;
     /* adc disable */
     regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
     regval &= ~GLB_GPADC1_GLOBAL_EN;
@@ -181,7 +275,7 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
     putreg32(regval, reg_base + GLB_GPADC_REG_CMD1_OFFSET);
 
     regval = 0;
-    regval |= (3 << GLB_GPADC1_PGA_VCM_SHIFT); /* 0.9V */
+    regval |= (3 << GLB_GPADC1_PGA_VCM_SHIFT);  /* 0.9V */
     regval |= (1 << GLB_GPADC1_PGA_GAIN_SHIFT); /* gain 1 */
     regval |= GLB_GPADC1_PGA_EN;
     if (config->differential_mode) {
@@ -202,7 +296,7 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
     regval &= ~GLB_GPADC1_SCN_EN;
     regval |= GLB_GPADC1_CONT_CONV_EN;
     regval &= ~GLB_GPADC1_RES_SEL_MASK;
-    regval |= (ADC_RESOLUTION_16B << GLB_GPADC1_RES_SEL_SHIFT);    /* resolution */
+    regval |= (ADC_RESOLUTION_16B << GLB_GPADC1_RES_SEL_SHIFT); /* resolution */
     putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
 
     regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG1_OFFSET);
@@ -225,13 +319,49 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
 
     /* only calibrate one time after power on, do not calibrate after reinit even wakeup from pds */
     if (adc_cali_complete == 0) {
-            offset = bflb_efuse_get_adc_offset_trim(dev);
-            coe = bflb_efuse_get_adc_gain_trim(dev);
-            tsen_offset = bflb_efuse_get_adc_tsen_trim();
-            adc_os1 = bflb_adc_get_internal_gnd_data(dev);
-            adc_dth = bflb_adc_get_internal_20mv_data(dev);
-            adc_cali_complete = 1;
+        offset = bflb_efuse_get_adc_offset_trim(dev);
+        coe = bflb_efuse_get_adc_gain_trim(dev);
+        tsen_offset = bflb_efuse_get_adc_tsen_trim();
+        adc_os1 = bflb_adc_get_internal_gnd_data(dev);
+        /* adc reset */
+        regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+        regval |= GLB_GPADC1_SOFT_RST;
+        putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+
+        __asm volatile("nop");
+        __asm volatile("nop");
+        __asm volatile("nop");
+        __asm volatile("nop");
+        __asm volatile("nop");
+        __asm volatile("nop");
+        __asm volatile("nop");
+        __asm volatile("nop");
+
+        regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+        regval &= ~GLB_GPADC1_SOFT_RST;
+        putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+
+        adc_dth = bflb_adc_get_internal_20mv_data(dev);
+        adc_cali_complete = 1;
     }
+
+    /* adc reset */
+    regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+    regval |= GLB_GPADC1_SOFT_RST;
+    putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+
+    __asm volatile("nop");
+    __asm volatile("nop");
+    __asm volatile("nop");
+    __asm volatile("nop");
+    __asm volatile("nop");
+    __asm volatile("nop");
+    __asm volatile("nop");
+    __asm volatile("nop");
+
+    regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+    regval &= ~GLB_GPADC1_SOFT_RST;
+    putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
 
     regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
     regval &= ~GLB_GPADC1_RES_SEL_MASK;
@@ -270,8 +400,7 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
 
     /* disable regular int and clear status */
     regval = getreg32(ADC_GPIP_BASE + GPIP_GPADC_CONFIG_OFFSET);
-    regval |= (GPIP_GPADC_FIFO_UNDERRUN_MASK | GPIP_GPADC_FIFO_OVERRUN_MASK | GPIP_GPADC_RDY_MASK |
-               GPIP_GPADC_FIFO_UNDERRUN_CLR | GPIP_GPADC_FIFO_OVERRUN_CLR | GPIP_GPADC_RDY_CLR);
+    regval |= (GPIP_GPADC_FIFO_UNDERRUN_MASK | GPIP_GPADC_FIFO_OVERRUN_MASK | GPIP_GPADC_RDY_MASK | GPIP_GPADC_FIFO_UNDERRUN_CLR | GPIP_GPADC_FIFO_OVERRUN_CLR | GPIP_GPADC_RDY_CLR);
 
     regval |= GPIP_GPADC_FIFO_CLR;
     regval &= ~GPIP_GPADC_FIFO_THL_MASK;
@@ -279,16 +408,12 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
     putreg32(regval, ADC_GPIP_BASE + GPIP_GPADC_CONFIG_OFFSET);
 
     regval = getreg32(ADC_GPIP_BASE + GPIP_GPADC_CONFIG_OFFSET);
-    regval &= ~(GPIP_GPADC_FIFO_UNDERRUN_CLR |
-                GPIP_GPADC_FIFO_OVERRUN_CLR |
-                GPIP_GPADC_RDY_CLR |
-                GPIP_GPADC_FIFO_CLR);
+    regval &= ~(GPIP_GPADC_FIFO_UNDERRUN_CLR | GPIP_GPADC_FIFO_OVERRUN_CLR | GPIP_GPADC_RDY_CLR | GPIP_GPADC_FIFO_CLR);
     putreg32(regval, ADC_GPIP_BASE + GPIP_GPADC_CONFIG_OFFSET);
 
     /* disable inject int and clear status */
     regval = getreg32(ADC_GPIP2_BASE + GPIP_GPADC_CONFIG_OFFSET);
-    regval |= (GPIP_GPADC_FIFO_UNDERRUN_MASK | GPIP_GPADC_FIFO_OVERRUN_MASK | GPIP_GPADC_RDY_MASK |
-               GPIP_GPADC_FIFO_UNDERRUN_CLR | GPIP_GPADC_FIFO_OVERRUN_CLR | GPIP_GPADC_RDY_CLR);
+    regval |= (GPIP_GPADC_FIFO_UNDERRUN_MASK | GPIP_GPADC_FIFO_OVERRUN_MASK | GPIP_GPADC_RDY_MASK | GPIP_GPADC_FIFO_UNDERRUN_CLR | GPIP_GPADC_FIFO_OVERRUN_CLR | GPIP_GPADC_RDY_CLR);
 
     regval |= GPIP_GPADC_FIFO_CLR;
     regval &= ~GPIP_GPADC_FIFO_THL_MASK;
@@ -296,12 +421,24 @@ void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *co
     putreg32(regval, ADC_GPIP2_BASE + GPIP_GPADC_CONFIG_OFFSET);
 
     regval = getreg32(ADC_GPIP2_BASE + GPIP_GPADC_CONFIG_OFFSET);
-    regval &= ~(GPIP_GPADC_FIFO_UNDERRUN_CLR |
-                GPIP_GPADC_FIFO_OVERRUN_CLR |
-                GPIP_GPADC_RDY_CLR |
-                GPIP_GPADC_FIFO_CLR);
+    regval &= ~(GPIP_GPADC_FIFO_UNDERRUN_CLR | GPIP_GPADC_FIFO_OVERRUN_CLR | GPIP_GPADC_RDY_CLR | GPIP_GPADC_FIFO_CLR);
     putreg32(regval, ADC_GPIP2_BASE + GPIP_GPADC_CONFIG_OFFSET);
+
+    regval = getreg32(reg_base + GLB_GPADC_REG_CMD1_OFFSET);
+    regval |= GLB_GPADC_TS_EN;
+    regval |= GLB_GPADC_TSVBE_LOW;
+    regval &= ~GLB_GPADC_TSEXT_SEL;
+    putreg32(regval, reg_base + GLB_GPADC_REG_CMD1_OFFSET);
+
+    regval = getreg32(reg_base + GLB_GPADC1_REG_STATUS_OFFSET);
+    regval |= (1U << GLB_GPADC1_RESERVED_SHIFT);
+    putreg32(regval, reg_base + GLB_GPADC1_REG_STATUS_OFFSET);
+
 #endif
+
+    bflb_adc_init_complete();
+
+    return 0;
 }
 
 void bflb_adc_deinit(struct bflb_device_s *dev)
@@ -326,7 +463,7 @@ void bflb_adc_deinit(struct bflb_device_s *dev)
     putreg32(regval, reg_base + GLB_GPADC1_REG_CMD1_OFFSET);
 
     regval = 0;
-    regval |= (3 << GLB_GPADC1_PGA_VCM_SHIFT); /* 0.9V */
+    regval |= (3 << GLB_GPADC1_PGA_VCM_SHIFT);   /* 0.9V */
     regval |= (2 << GLB_GPADC1_CHOP_MODE_SHIFT); /* Vref AZ and PGA chop on */
     regval |= (32 << GLB_GPADC1_VREF_TRIM_SHIFT);
     putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG1_OFFSET);
@@ -349,6 +486,8 @@ void bflb_adc_deinit(struct bflb_device_s *dev)
     putreg32(regval, ADC_GPIP_BASE + GPIP_GPADC_CONFIG_OFFSET);
     putreg32(regval, ADC_GPIP2_BASE + GPIP_GPADC_CONFIG_OFFSET);
 #endif
+
+    bflb_adc_reset_state();
 }
 
 void bflb_adc_link_rxdma(struct bflb_device_s *dev, bool enable)
@@ -398,9 +537,10 @@ int bflb_adc_channel_config_internal(struct bflb_device_s *dev, struct bflb_adc_
 
     reg_base = dev->reg_base;
 
-    if (channels != 1) {
+    if (channels != 1 || getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET) & GLB_GPADC1_SCN_EN) {
         return -EINVAL;
     }
+
     /* disable external channel */
     regval = getreg32(reg_base + GLB_GPADC1_REG_CMD1_OFFSET);
     regval &= ~GLB_GPADC1_EXT_NEG_SEL_MASK;
@@ -408,6 +548,7 @@ int bflb_adc_channel_config_internal(struct bflb_device_s *dev, struct bflb_adc_
     regval &= ~GLB_GPADC1_EXT_POS_SEL_MASK;
     regval |= (0xF << GLB_GPADC1_EXT_POS_SEL_SHIFT);
     putreg32(regval, reg_base + GLB_GPADC1_REG_CMD1_OFFSET);
+
     /* config internal channel */
     regval = getreg32(reg_base + GLB_GPADC_REG_CMD1_OFFSET);
     regval &= ~GLB_GPADC_INT_POS_SEL_MASK;
@@ -761,6 +902,89 @@ void bflb_adc_clear_fifo_inject(struct bflb_device_s *dev)
 #endif
 }
 
+int bflb_adc_inject_context_save(struct bflb_device_s *dev, struct bflb_adc_inject_context_s *context)
+{
+    uintptr_t irq_state;
+    uint32_t reg_base;
+    uint32_t gpip2_config;
+    bool restore_config;
+
+    if ((dev == NULL) || (context == NULL)) {
+        return -EINVAL;
+    }
+
+    reg_base = dev->reg_base;
+    irq_state = bflb_irq_save();
+    gpip2_config = getreg32(ADC_GPIP2_BASE + GPIP_GPADC_CONFIG_OFFSET);
+    restore_config = (adc_init_state == ADC_INIT_STATE_READY) && ((getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET) & GLB_GPADC1_GLOBAL_EN) != 0);
+    if (adc_inject_context_owned || (adc_init_state == ADC_INIT_STATE_INITIALIZING) || (restore_config && ((gpip2_config & GPIP_GPADC_FIFO_DATA_COUNT_MASK) != 0))) {
+        bflb_irq_restore(irq_state);
+        return -EBUSY;
+    }
+
+    adc_inject_context_owned = 1;
+    adc_inject_context_token++;
+    if (adc_inject_context_token == 0) {
+        adc_inject_context_token++;
+    }
+    context->token = adc_inject_context_token;
+    context->restore_config = restore_config;
+    bflb_irq_restore(irq_state);
+
+    context->adc_cmd1 = getreg32(reg_base + GLB_GPADC_REG_CMD1_OFFSET);
+    context->adc_config1 = getreg32(reg_base + GLB_GPADC1_REG_CONFIG1_OFFSET);
+    context->adc_config2 = getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
+    context->adc_status = getreg32(reg_base + GLB_GPADC1_REG_STATUS_OFFSET);
+    context->inject_pos1 = getreg32(reg_base + GLB_GPADC_REG_INSERT_POS1_OFFSET);
+    context->inject_pos2 = getreg32(reg_base + GLB_GPADC_REG_INSERT_POS2_OFFSET);
+    context->inject_neg1 = getreg32(reg_base + GLB_GPADC_REG_INSERT_NEG1_OFFSET);
+    context->inject_neg2 = getreg32(reg_base + GLB_GPADC_REG_INSERT_NEG2_OFFSET);
+    context->internal_inject_pos = getreg32(reg_base + GLB_GPADC_INT_INSERT_POS_OFFSET);
+    context->internal_inject_neg = getreg32(reg_base + GLB_GPADC_INT_INSERT_NEG_OFFSET);
+    context->gpip2_config = gpip2_config;
+
+    return 0;
+}
+
+int bflb_adc_inject_context_restore(struct bflb_device_s *dev, const struct bflb_adc_inject_context_s *context)
+{
+    uintptr_t irq_state;
+    uint32_t reg_base;
+
+    if ((dev == NULL) || (context == NULL) || (context->token == 0)) {
+        return -EINVAL;
+    }
+
+    irq_state = bflb_irq_save();
+    if (!adc_inject_context_owned || (context->token != adc_inject_context_token)) {
+        bflb_irq_restore(irq_state);
+        return -EINVAL;
+    }
+    bflb_irq_restore(irq_state);
+
+    bflb_adc_clear_fifo_inject(dev);
+    if (context->restore_config) {
+        reg_base = dev->reg_base;
+        putreg32(context->inject_pos1, reg_base + GLB_GPADC_REG_INSERT_POS1_OFFSET);
+        putreg32(context->inject_pos2, reg_base + GLB_GPADC_REG_INSERT_POS2_OFFSET);
+        putreg32(context->inject_neg1, reg_base + GLB_GPADC_REG_INSERT_NEG1_OFFSET);
+        putreg32(context->inject_neg2, reg_base + GLB_GPADC_REG_INSERT_NEG2_OFFSET);
+        putreg32(context->internal_inject_pos, reg_base + GLB_GPADC_INT_INSERT_POS_OFFSET);
+        putreg32(context->internal_inject_neg, reg_base + GLB_GPADC_INT_INSERT_NEG_OFFSET);
+        bflb_adc_restore_reg(reg_base + GLB_GPADC_REG_CMD1_OFFSET, context->adc_cmd1, ADC_CONTEXT_CMD1_MASK);
+        bflb_adc_restore_reg(reg_base + GLB_GPADC1_REG_STATUS_OFFSET, context->adc_status, ADC_CONTEXT_STATUS_MASK);
+        bflb_adc_restore_reg(reg_base + GLB_GPADC1_REG_CONFIG1_OFFSET, context->adc_config1, ADC_CONTEXT_CONFIG1_MASK);
+        bflb_adc_restore_reg(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET, context->adc_config2, ADC_CONTEXT_CONFIG2_MASK);
+        bflb_adc_restore_reg(ADC_GPIP2_BASE + GPIP_GPADC_CONFIG_OFFSET, context->gpip2_config, ADC_CONTEXT_GPIP2_MASK);
+    }
+
+    irq_state = bflb_irq_save();
+    adc_inject_context_owned = 0;
+    bflb_irq_restore(irq_state);
+
+    return 0;
+}
+
 void bflb_adc_int_mask(struct bflb_device_s *dev, uint32_t int_type, bool mask)
 {
 #ifdef romapi_bflb_adc_int_mask
@@ -891,11 +1115,9 @@ void bflb_adc_parse_result(struct bflb_device_s *dev, uint32_t *buffer, struct b
             border = adc_out_raw - offset * 2;
             adc_data = ((border < 0) ? 0 : ((border > 0xFFFF) ? 0xFFFF : border));
             adc_data /= coe;
-
-            if ((adc_dth > adc_os1) && (adc_data < (float)adc_dth)) {
+            if ((adc_dth > adc_os1) && (adc_data <= (float)adc_dth)) {
                 adc_data = (adc_data - (float)adc_os1) * (float)adc_dth / (float)(adc_dth - adc_os1);
             }
-
             adc_data_final = (adc_data < 0.0f) ? 0U : ((adc_data > 65535.0f) ? 0xFFFFU : (uint32_t)adc_data);
             if (resolution == ADC_RESOLUTION_12B) {
                 result[i].value = adc_data_final >> 4;
@@ -953,130 +1175,14 @@ void bflb_adc_parse_result(struct bflb_device_s *dev, uint32_t *buffer, struct b
 #endif
 }
 
-void bflb_adc_tsen_init(struct bflb_device_s *dev, uint8_t tsen_mod)
+float bflb_adc_tsen_raw_to_temperature(struct bflb_device_s *dev, uint32_t rawdata_P, uint32_t rawdata_N)
 {
-#ifdef romapi_bflb_adc_tsen_init
-    romapi_bflb_adc_tsen_init(dev, tsen_mod);
-#else
-    uint32_t regval;
-    uint32_t reg_base;
-
-    reg_base = dev->reg_base;
-
-    regval = getreg32(reg_base + GLB_GPADC_REG_CMD1_OFFSET);
-    regval |= GLB_GPADC_TS_EN;
-    regval |= GLB_GPADC_TSVBE_LOW;
-    if (tsen_mod) {
-        regval |= GLB_GPADC_TSEXT_SEL;
-    } else {
-        regval &= ~GLB_GPADC_TSEXT_SEL;
-    }
-    putreg32(regval, reg_base + GLB_GPADC_REG_CMD1_OFFSET);
-
-    regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG1_OFFSET);
-    regval &= ~GLB_GPADC1_PGA_VCMI_EN;
-    regval &= ~GLB_GPADC1_CHOP_MODE_MASK;
-    regval |= (1 << GLB_GPADC1_CHOP_MODE_SHIFT); /* Vref AZ */
-    regval &= ~GLB_GPADC1_PGA_VCM_MASK;
-    regval |= (1 << GLB_GPADC1_PGA_VCM_SHIFT);
-    putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG1_OFFSET);
-
-    regval = getreg32(reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
-    regval |= GLB_GPADC1_DWA_EN;
-    regval &= ~GLB_GPADC1_DLY_SEL_MASK;
-    regval |= (2 << GLB_GPADC1_DLY_SEL_SHIFT);
-    regval |= GLB_GPADC1_DITHER_EN;
-    putreg32(regval, reg_base + GLB_GPADC1_REG_CONFIG2_OFFSET);
-
-    regval = getreg32(reg_base + GLB_GPADC1_REG_STATUS_OFFSET);
-    regval |= (1U << GLB_GPADC1_RESERVED_SHIFT);
-    putreg32(regval, reg_base + GLB_GPADC1_REG_STATUS_OFFSET);
-#endif
-}
-
-float bflb_adc_tsen_get_temp(struct bflb_device_s *dev)
-{
-#ifdef romapi_bflb_adc_tsen_get_temp
-    return romapi_bflb_adc_tsen_get_temp(dev);
-#else
-    struct bflb_adc_channel_s chan;
-    uint32_t raw_data0 = 0, raw_data1 = 0;
-    float temp = 0;
-    uint32_t raw_data;
-    uint64_t start_time;
-    uint32_t sum;
     float delta;
 
-    chan.pos_chan = ADC_INTERNAL_CHANNEL_TSEN_N;
-    chan.neg_chan = ADC_INTERNAL_CHANNEL_AVSS;
-    if (bflb_adc_channel_config_internal(dev, &chan, 1) < 0) {
-        return -EINVAL;
-    }
-
-    bflb_adc_clear_fifo(dev);
-
-    sum = 0;
-    bflb_adc_start_conversion(dev);
-    for (int i = 0; i < 8; i++) {
-        start_time = bflb_mtimer_get_time_ms();
-        while (bflb_adc_get_count(dev) == 0) {
-            if ((bflb_mtimer_get_time_ms() - start_time) > 100) {
-                return -ETIMEDOUT;
-            }
-        }
-        bflb_adc_read_raw(dev);
-    }
-    for (int i = 0; i < 16; i++) {
-        start_time = bflb_mtimer_get_time_ms();
-        while (bflb_adc_get_count(dev) == 0) {
-            if ((bflb_mtimer_get_time_ms() - start_time) > 100) {
-                return -ETIMEDOUT;
-            }
-        }
-        raw_data = bflb_adc_read_raw(dev);
-        sum += (raw_data & 0xFFFF);
-    }
-    bflb_adc_stop_conversion(dev);
-    raw_data1 = (sum + 8) / 16;
-
-    chan.pos_chan = ADC_INTERNAL_CHANNEL_TSEN_P;
-    chan.neg_chan = ADC_INTERNAL_CHANNEL_AVSS;
-    if (bflb_adc_channel_config_internal(dev, &chan, 1) < 0) {
-        return -EINVAL;
-    }
-    bflb_mtimer_delay_ms(10);
-
-    bflb_adc_clear_fifo(dev);
-
-    sum = 0;
-    bflb_adc_start_conversion(dev);
-    for (int i = 0; i < 8; i++) {
-        start_time = bflb_mtimer_get_time_ms();
-        while (bflb_adc_get_count(dev) == 0) {
-            if ((bflb_mtimer_get_time_ms() - start_time) > 100) {
-                return -ETIMEDOUT;
-            }
-        }
-        bflb_adc_read_raw(dev);
-    }
-    for (int i = 0; i < 16; i++) {
-        start_time = bflb_mtimer_get_time_ms();
-        while (bflb_adc_get_count(dev) == 0) {
-            if ((bflb_mtimer_get_time_ms() - start_time) > 100) {
-                return -ETIMEDOUT;
-            }
-        }
-        raw_data = bflb_adc_read_raw(dev);
-        sum += (raw_data & 0xFFFF);
-    }
-    bflb_adc_stop_conversion(dev);
-    raw_data0 = (sum + 8) / 16;
-
-    delta = ((float)raw_data1 - (float)raw_data0) / coe;
-    temp = (delta - (float)tsen_offset) / 8.488f;
-
-    return temp;
-#endif
+    (void)dev;
+    delta = ((float)(rawdata_N & 0xFFFF) - (float)(rawdata_P & 0xFFFF)) / coe;
+    delta = (delta >= 0.0f) ? delta : -delta;
+    return (delta - (float)tsen_offset) / 8.488f;
 }
 
 void bflb_adc_vbat_enable(struct bflb_device_s *dev)
@@ -1133,6 +1239,23 @@ int bflb_adc_feature_control(struct bflb_device_s *dev, int cmd, size_t arg)
                 regval &= ~GLB_GPADC_VBAT_EN;
                 putreg32(regval, reg_base + GLB_GPADC_REG_CMD1_OFFSET);
             }
+            break;
+        case ADC_CMD_TSEN_EN:
+            regval = getreg32(reg_base + GLB_GPADC_REG_CMD1_OFFSET);
+            if (arg) {
+                regval |= (GLB_GPADC_TS_EN | GLB_GPADC_TSVBE_LOW);
+            } else {
+                regval &= ~(GLB_GPADC_TS_EN | GLB_GPADC_TSVBE_LOW);
+            }
+            putreg32(regval, reg_base + GLB_GPADC_REG_CMD1_OFFSET);
+
+            regval = getreg32(reg_base + GLB_GPADC1_REG_STATUS_OFFSET);
+            if (arg) {
+                regval |= (1U << GLB_GPADC1_RESERVED_SHIFT);
+            } else {
+                regval &= ~(1U << GLB_GPADC1_RESERVED_SHIFT);
+            }
+            putreg32(regval, reg_base + GLB_GPADC1_REG_STATUS_OFFSET);
             break;
         case ADC_CMD_CONV_DELAY:
             /* register 0 means 256 */

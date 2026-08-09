@@ -946,6 +946,28 @@ float bflb_efuse_get_adc_gain_trim(struct bflb_device_s *dev)
 }
 
 /****************************************************************************/ /**
+ * @brief  Efuse read adc tsen trim
+ *
+ * @param  None
+ *
+ * @return int
+ *
+*******************************************************************************/
+uint32_t bflb_efuse_get_adc_tsen_trim(void)
+{
+    bflb_ef_ctrl_com_trim_t trim;
+
+    bflb_ef_ctrl_read_common_trim(NULL, "tsen", &trim, 1);
+    if (trim.en) {
+        if (trim.parity == bflb_ef_ctrl_get_trim_parity(trim.value, trim.len)) {
+            return trim.value;
+        }
+    }
+
+    return 2300;
+}
+
+/****************************************************************************/ /**
  * @brief  Efuse set AES key read/write lock
  *
  * @param  key_index: AES key index
@@ -1471,4 +1493,102 @@ int bflb_efuse_read_mac_address_opt(uint8_t slot, uint8_t mac[6], uint8_t reload
     } else {
         return -1;
     }
+}
+
+/****************************************************************************/ /**
+ * @brief  Select wl x clock source
+ *
+ * @param  clkSel:
+ *           @arg GLB_WL_MCU_XCLK_RC32M
+ *           @arg GLB_WL_MCU_XCLK_XTAL
+ *
+ * @return SUCCESS or ERROR
+ *
+*******************************************************************************/
+void ATTR_CLOCK_SECTION GLB_Set_WIFIPLL_Fine_Tune(void)
+{
+    uint32_t tmpVal;
+
+#if defined(CPU_MODEL_A0)
+    /* WIFIPLL HW CTRL @ 0x200010D4 */
+    tmpVal = BL_RD_WORD(RF_BASE + RF_ANA1_WIFIPLL_HW_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_VCO_RSHT_EN_TX, 0);   /* [12]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_VCO_RSHT_EN_TX_BZ, 0);/* [16]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_PI_BYPASS_RX_BZ, 1);  /* [6]   = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_PI_BYPASS_RX, 1);     /* [2]   = 1 */
+    BL_WR_WORD(RF_BASE + RF_ANA1_WIFIPLL_HW_CTRL_OFFSET, tmpVal);
+
+    /* WIFIPLL PI/SDM/LMS @ 0x200010E4 */
+    tmpVal = BL_RD_WORD(RF_BASE + RF_ANA1_WIFIPLL_PI_SDM_LMS_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_PI_BYPASS, 1);        /* [31]  = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_BYPASS, 0);       /* [24]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_DITH_FORCE_EN, 0);/* [23]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, RF_ANA1_WIFIPLL_SDM_DITH_EN, 0);      /* [22]  = 0 */
+    BL_WR_WORD(RF_BASE + RF_ANA1_WIFIPLL_PI_SDM_LMS_OFFSET, tmpVal);
+#endif
+#if 0
+    /* WIFIPLL HW CTRL @ 0x200010D4 */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_WIFIPLL_HW_CTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_VCO_RSHT_EN_TX_BZ, 0);/* [16]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_PI_BYPASS_RX_BZ, 1);  /* [6]   = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_PI_BYPASS_RX, 1);     /* [2]   = 1 */
+    BL_WR_WORD(CCI_BASE + CCI_WIFIPLL_HW_CTRL_OFFSET, tmpVal);
+
+    /* WIFIPLL PI/SDM/LMS @ 0x200010E4 */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_WIFIPLL_PI_SDM_LMS_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_PI_BYPASS, 1);        /* [31]  = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_SDM_BYPASS, 0);       /* [24]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_SDM_DITH_FORCE_EN, 0);/* [23]  = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_WIFIPLL_SDM_DITH_EN, 0);      /* [22]  = 0 */
+    BL_WR_WORD(CCI_BASE + CCI_WIFIPLL_PI_SDM_LMS_OFFSET, tmpVal);
+#endif
+#if 0
+    /* should be set on system init, not here */
+    /* RC32M reserved @ 0x2008F994[25] = 1 (within field [31:24]) */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_RC32M_CTRL1_AON_OFFSET);
+    val |= (1U << (25));
+    BL_WR_WORD(AON_BASE + AON_RC32M_CTRL1_AON_OFFSET, tmpVal);
+#endif
+    /* DCDC12 @ 0x2008F83C: VPFM=1, VC_CLAMP_VTH=3 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_DCDC12_3_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_VPFM_AON, 1);              /* [19:16] = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_VC_CLAMP_VTH_AON, 3);      /* [2:0]   = 3 */
+    BL_WR_WORD(AON_BASE + AON_DCDC12_3_OFFSET, tmpVal);
+
+    /* DCDC12 @ 0x2008F830: BM_NM=7, ISENSE_TRIM=3 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_DCDC12_0_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_BM_NM_AON, 7);             /* [6:4]   = 7 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_ISENSE_TRIM_AON, 3);       /* [30:28] = 3 */
+    BL_WR_WORD(AON_BASE + AON_DCDC12_0_OFFSET, tmpVal);
+
+    /* DCDC12 @ 0x2008F834: OSC_2M_MODE=1, OSC_EN_INHIBIT_T2=0, OCP_VTH=1, LP_FORCE_EN=0 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_DCDC12_1_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_OSC_2M_MODE_AON, 1);       /* [20]    = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_OSC_EN_INHIBIT_T2_AON, 0); /* [21]    = 0 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_OCP_VTH_AON, 1);           /* [18:16] = 1 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_LP_FORCE_EN_AON, 0);       /* [1]     = 0 */
+    BL_WR_WORD(AON_BASE + AON_DCDC12_1_OFFSET, tmpVal);
+
+    /* DCDC12 @ 0x2008F838: RC_SEL=4, SSTART_TIME=1 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_DCDC12_2_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_RC_SEL_AON, 4);            /* [15:12] = 4 */
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_DCDC12_SSTART_TIME_AON, 1);       /* [29:28] = 1 */
+    BL_WR_WORD(AON_BASE + AON_DCDC12_2_OFFSET, tmpVal);
+
+#if 0
+    /* should be set on system init, not here */
+    /* LDO08AON @ 0x2008F80C: interpret 4'h12 as TRIM=1, SEL=2 */
+    tmpVal = BL_RD_WORD(AON_BASE + AON_0_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, AON_LDO08AON_VOUT_SEL_AON, 0xC);      /* [27:24] = 12 */
+    BL_WR_WORD(AON_BASE + AON_0_OFFSET, tmpVal);
+#endif
+
+    /* CPUPLL tweaks */
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_LF_VCTRL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_MOM_UPDATE_PERIOD, 3);     /* 0x200087D8[1:0] = 3 */
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_LF_VCTRL_OFFSET, tmpVal);
+
+    tmpVal = BL_RD_WORD(CCI_BASE + CCI_CPUPLL_SPD_FCAL_OFFSET);
+    tmpVal = BL_SET_REG_BITS_VAL(tmpVal, CCI_CPUPLL_COARSE_GAIN, 3);           /* 0x200087D4[30:29] = 3 */
+    BL_WR_WORD(CCI_BASE + CCI_CPUPLL_SPD_FCAL_OFFSET, tmpVal);
 }

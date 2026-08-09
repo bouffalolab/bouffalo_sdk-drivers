@@ -469,12 +469,12 @@ __ALWAYS_INLINE ATTR_TCM_SECTION
 float bflb_efuse_get_adc_trim(void) {
     return RomDriver_bflb_efuse_get_adc_trim();
 }
-#endif
 
 __ALWAYS_INLINE ATTR_TCM_SECTION
 uint32_t bflb_efuse_get_adc_tsen_trim(void) {
     return RomDriver_bflb_efuse_get_adc_tsen_trim();
 }
+#endif
 
 __ALWAYS_INLINE ATTR_TCM_SECTION
 void bflb_efuse_read_secure_boot(uint8_t *sign, uint8_t *aes) {
@@ -613,10 +613,12 @@ BL_Err_Type GLB_Set_WL_XCLK_Sel(uint8_t clkSel) {
     return RomDriver_GLB_Set_WL_XCLK_Sel(clkSel);
 }
 
+#if 0
 __ALWAYS_INLINE ATTR_TCM_SECTION
 void GLB_Set_WIFIPLL_Fine_Tune(void) {
     return RomDriver_GLB_Set_WIFIPLL_Fine_Tune();
 }
+#endif
 
 __ALWAYS_INLINE ATTR_TCM_SECTION
 uint8_t GLB_Get_Core_Type(void) {

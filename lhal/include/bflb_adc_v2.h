@@ -112,6 +112,7 @@
   * @{
   */
 #define ADC_CMD_VBAT_EN              (0x01)
+#define ADC_CMD_TSEN_EN              (0x02)
 #define ADC_CMD_CONV_DELAY           (0x04)
 #define ADC_CMD_PWM_TRIG_EN          (0x05)
 #define ADC_CMD_SET_THRE_DMA_REGULAR (0x06)
@@ -182,6 +183,29 @@ struct bflb_adc_result_s {
     int32_t millivolt;
 };
 
+/**
+ * @brief ADC inject configuration context
+ *
+ * The fields in this structure are private to the ADC driver. A context must
+ * be acquired with bflb_adc_inject_context_save() and released with
+ * bflb_adc_inject_context_restore().
+ */
+struct bflb_adc_inject_context_s {
+    uint32_t token;
+    uint32_t restore_config;
+    uint32_t adc_cmd1;
+    uint32_t adc_config1;
+    uint32_t adc_config2;
+    uint32_t adc_status;
+    uint32_t inject_pos1;
+    uint32_t inject_pos2;
+    uint32_t inject_neg1;
+    uint32_t inject_neg2;
+    uint32_t internal_inject_pos;
+    uint32_t internal_inject_neg;
+    uint32_t gpip2_config;
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -191,8 +215,9 @@ extern "C" {
  *
  * @param [in] dev device handle
  * @param [in] config pointer to save adc configuration
+ * @return Zero on success; -EBUSY if another initialization is in progress
  */
-void bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *config);
+int bflb_adc_init(struct bflb_device_s *dev, const struct bflb_adc_config_s *config);
 
 /**
  * @brief Deinitialize adc.
@@ -332,6 +357,31 @@ void bflb_adc_clear_fifo(struct bflb_device_s *dev);
 void bflb_adc_clear_fifo_inject(struct bflb_device_s *dev);
 
 /**
+ * @brief Acquire ADC inject configuration and save its context.
+ *
+ * All users sharing ADC inject conversion must acquire a context before
+ * changing inject configuration or starting a conversion. The context must be
+ * restored after the conversion data has been consumed. Every successful
+ * save call must be paired with exactly one restore call. Do not call restore
+ * when save returns an error.
+ *
+ * @param [in] dev device handle
+ * @param [out] context pointer to save ADC inject configuration
+ * @return Zero on success; -EBUSY if inject conversion is owned or has unread
+ *         data; otherwise a negated errno value on failure
+ */
+int bflb_adc_inject_context_save(struct bflb_device_s *dev, struct bflb_adc_inject_context_s *context);
+
+/**
+ * @brief Restore ADC inject configuration and release its ownership.
+ *
+ * @param [in] dev device handle
+ * @param [in] context pointer to previously saved ADC inject configuration
+ * @return Zero on success; otherwise a negated errno value on failure
+ */
+int bflb_adc_inject_context_restore(struct bflb_device_s *dev, const struct bflb_adc_inject_context_s *context);
+
+/**
  * @brief Enable or disable adc interrupt.
  *
  * @param [in] dev device handle
@@ -368,20 +418,14 @@ void bflb_adc_int_clear(struct bflb_device_s *dev, uint32_t int_type);
 void bflb_adc_parse_result(struct bflb_device_s *dev, uint32_t *buffer, struct bflb_adc_result_s *result, uint16_t count);
 
 /**
- * @brief Initialize adc temperature sensor
+ * @brief Calculate adc temperature from TSEN_N and TSEN_P raw words.
  *
  * @param [in] dev device handle
- * @param [in] tsen_mod temperature sensor mode, use @ref ADC_TSEN_MOD
- */
-void bflb_adc_tsen_init(struct bflb_device_s *dev, uint8_t tsen_mod);
-
-/**
- * @brief Get adc temperature
- *
- * @param [in] dev device handle
+ * @param [in] rawdata_P raw word from ADC_INTERNAL_CHANNEL_TSEN_P
+ * @param [in] rawdata_N raw word from ADC_INTERNAL_CHANNEL_TSEN_N
  * @return temperature
  */
-float bflb_adc_tsen_get_temp(struct bflb_device_s *dev);
+float bflb_adc_tsen_raw_to_temperature(struct bflb_device_s *dev, uint32_t rawdata_P, uint32_t rawdata_N);
 
 /**
  * @brief Enable adc vbat power.

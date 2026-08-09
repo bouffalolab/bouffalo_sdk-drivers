@@ -311,6 +311,28 @@ float bflb_efuse_get_adc_gain_trim(struct bflb_device_s *dev)
 }
 
 /****************************************************************************/ /**
+ * @brief  Efuse read adc tsen trim
+ *
+ * @param  None
+ *
+ * @return int
+ *
+*******************************************************************************/
+uint32_t bflb_efuse_get_adc_tsen_trim(void)
+{
+    bflb_ef_ctrl_com_trim_t trim;
+
+    bflb_ef_ctrl_read_common_trim(NULL, "tsen", &trim, 1);
+    if (trim.en) {
+        if (trim.parity == bflb_ef_ctrl_get_trim_parity(trim.value, trim.len)) {
+            return trim.value;
+        }
+    }
+
+    return 2300;
+}
+
+/****************************************************************************/ /**
  * @brief  Efuse write optional MAC address
  *
  * @param  slot: MAC address slot

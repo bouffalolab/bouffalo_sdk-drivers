@@ -1803,8 +1803,8 @@ __UNUSED static const ATTR_TCM_CONST_SECTION spi_flash_cfg_type flash_cfg_issi_2
     .write_vreg_enable_cmd = 0x00,
 
     /* qpi mode */
-    .enter_qpi = 0x38,
-    .exit_qpi = 0xff,
+    .enter_qpi = 0x35,
+    .exit_qpi = 0xf5,
 
     /*AC*/
     .time_e_sector = 300,
@@ -2877,6 +2877,11 @@ __UNUSED static const ATTR_TCM_CONST_SECTION flash_info_t flash_infos[] = {
         .jedec_id = 0x1765C8,
         //.name="gd_wq64e_64_1833",
         .cfg = &flash_cfg_gd_q32e_q128e,
+    },
+    {
+        .jedec_id = 0x21609d,
+        //.name="issi_25lp01g_33",
+        .cfg = &flash_cfg_issi_25lp256,
     },
 };
 

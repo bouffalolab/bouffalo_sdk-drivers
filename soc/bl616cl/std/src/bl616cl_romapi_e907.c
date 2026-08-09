@@ -211,12 +211,12 @@ __ALWAYS_INLINE ATTR_TCM_SECTION
 float bflb_efuse_get_adc_trim(void) {
     return RomDriver_bflb_efuse_get_adc_trim();
 }
-#endif
 
 __ALWAYS_INLINE ATTR_TCM_SECTION
 uint32_t bflb_efuse_get_adc_tsen_trim(void) {
     return RomDriver_bflb_efuse_get_adc_tsen_trim();
 }
+#endif
 
 __ALWAYS_INLINE ATTR_TCM_SECTION
 void bflb_efuse_read_secure_boot(uint8_t *sign, uint8_t *aes) {

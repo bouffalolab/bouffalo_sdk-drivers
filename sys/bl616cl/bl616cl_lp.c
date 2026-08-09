@@ -70,6 +70,26 @@ static int bl_lp_check_iot2lp_para_pointers(iot2lp_para_t *para)
     return 0;
 }
 
+static int bl_lp_power_cfg_update(const PM_LOWPOWER_CFG_Type *lowpower_cfg)
+{
+    if (lowpower_cfg == NULL) {
+        return -1;
+    }
+
+    memcpy(&lp_fw_dcdc_soc_cfg, &lowpower_cfg->soc_cfg, sizeof(lp_fw_dcdc_soc_cfg));
+    iot2lp_para->dcdc_soc_cfg = &lp_fw_dcdc_soc_cfg;
+    memcpy(&lp_fw_dcdc_sys_cfg, &lowpower_cfg->sys_cfg, sizeof(lp_fw_dcdc_sys_cfg));
+    iot2lp_para->dcdc_sys_cfg = &lp_fw_dcdc_sys_cfg;
+    iot2lp_para->pds_ldo18io_power_down = lowpower_cfg->lp_cfg.ldo18io_power_down;
+
+    return 0;
+}
+
+__attribute__((weak)) const PM_LOWPOWER_CFG_Type *bl616cl_lowpower_cfg_get(void)
+{
+    return NULL;
+}
+
 void bl_lp_wifi_param_update(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
 {
     if (bl_lp_fw_cfg->tim_wakeup_en) {
@@ -440,10 +460,6 @@ void bl_lp_fw_init(void)
     iot2lp_para->clock_config = &lp_fw_clock_cfg;
 
     iot2lp_para->dcdc_sel_pin = BL_EXT_DCDC_OUTPUT_CTRL_PIN_DISABLED;
-    memcpy(&lp_fw_dcdc_soc_cfg, pm_dcdc_soc_default_cfg_get(), sizeof(lp_fw_dcdc_soc_cfg));
-    iot2lp_para->dcdc_soc_cfg = &lp_fw_dcdc_soc_cfg;
-    memcpy(&lp_fw_dcdc_sys_cfg, pm_dcdc_sys_default_cfg_get(), sizeof(lp_fw_dcdc_sys_cfg));
-    iot2lp_para->dcdc_sys_cfg = &lp_fw_dcdc_sys_cfg;
 
     /* lpfw info */
     memset(&lp_info_struct, 0, sizeof(lp_info_struct));
@@ -642,10 +658,16 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
     uint32_t bcn_loss_level;
     int32_t rtc32k_error_us;
     uint32_t total_error;
+    const PM_LOWPOWER_CFG_Type *lowpower_cfg;
 
     lp_fw_bcn_loss_level_t *bcn_loss_cfg = NULL;
 
     if (bl_lp_fw_cfg == NULL) {
+        return -1;
+    }
+
+    lowpower_cfg = bl616cl_lowpower_cfg_get();
+    if (lowpower_cfg == NULL) {
         return -1;
     }
 
@@ -690,6 +712,9 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
     }
 
     bl_lp_wifi_param_update(bl_lp_fw_cfg);
+    if (bl_lp_power_cfg_update(lowpower_cfg) != 0) {
+        return -1;
+    }
 
    /* ready sleep*/
     iot2lp_para->wakeup_flag = 0;
@@ -863,10 +888,10 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
 
         if (bl_lp_fw_cfg->tim_wakeup_en) {
             /* pds15 enter */
-            pm_pds_mode_enter(PM_PDS_LEVEL_15, BL_US_TO_PDS_CNT(pds_sleep_us));
+            pm_pds_mode_enter(PM_PDS_LEVEL_15, BL_US_TO_PDS_CNT(pds_sleep_us), lowpower_cfg);
         } else {
             /* pds15 enter */
-            pm_pds_mode_enter(PM_PDS_LEVEL_15, 0);
+            pm_pds_mode_enter(PM_PDS_LEVEL_15, 0, lowpower_cfg);
         }
 
 
