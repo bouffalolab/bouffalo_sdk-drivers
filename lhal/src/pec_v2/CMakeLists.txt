@@ -12,6 +12,7 @@ if(IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/instance AND IS_DIRECTORY ${CMAK
     sdk_library_add_sources(src/instance/bflb_pec_uart_tx.c)
     sdk_library_add_sources(src/instance/bflb_pec_uart_rx.c)
     sdk_library_add_sources(src/instance/bflb_pec_ir.c)
+    sdk_library_add_sources(src/instance/bflb_pec_ir_rx.c)
     sdk_library_add_sources(src/instance/bflb_pec_spi.c)
     sdk_library_add_sources(src/instance/bflb_pec_i2c.c)
     sdk_library_add_sources(src/instance/bflb_pec_dpi.c)

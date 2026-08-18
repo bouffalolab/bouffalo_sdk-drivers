@@ -83,6 +83,7 @@ BL_Err_Type pm_set_gpio_int_mask(int pin, int int_mask);
 BL_Err_Type pm_set_gpio_trig_mode_int_mask(int pin, int trig_mode, int int_mask);
 int pm_lowpower_gpio_cfg(lp_gpio_cfg_type *gpio_cfg);
 char *pm_get_trig_mode_desc(int index);
+uint8_t pm_get_sf_pin_select(void);
 void pm_pds_mode_enter(enum pm_pds_sleep_level pds_level, uint32_t sleep_time);
 void pm_hbn_mode_enter(enum pm_hbn_sleep_level hbn_level, uint64_t sleep_time);
 void pm_set_wakeup_callback(void (*wakeup_callback)(void));

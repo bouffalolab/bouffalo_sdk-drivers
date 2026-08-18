@@ -288,6 +288,7 @@ uint32_t bflb_flash2_get_jedec_id(void)
  */
 static uint32_t ATTR_TCM_SECTION flash_get_size_from_jedecid(uint32_t jedec_id)
 {
+    uint8_t capacity_id = 0;
     uint8_t flash_size_level = 0;
     uint32_t flash_size = 0;
     uint32_t jid = 0;
@@ -298,8 +299,12 @@ static uint32_t ATTR_TCM_SECTION flash_get_size_from_jedecid(uint32_t jedec_id)
         return 0;
     }
 
-    flash_size_level = (jid & 0x1f);
-    flash_size_level -= 0x13;
+    capacity_id = jid & 0xff;
+    if (capacity_id >= 0x20 && capacity_id <= 0x23) {
+        flash_size_level = capacity_id - 0x19;
+    } else {
+        flash_size_level = (capacity_id & 0x1f) - 0x13;
+    }
     flash_size = (1 << flash_size_level) * 512 * 1024;
 
     return flash_size;

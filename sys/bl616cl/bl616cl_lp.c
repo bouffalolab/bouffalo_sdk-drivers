@@ -414,8 +414,7 @@ void bl_lp_fw_init(void)
 
     memset(&rc32k_trim, 0, sizeof(rc32k_trim));
     iot2lp_para->rc32k_trim_parameter = &rc32k_trim;
-    /* Save rc32k code in HBN_RAM */
-    iot2lp_para->rc32k_trim_parameter->rc32k_fr_ext = HBN_Get_RC32K_R_Code();
+    bl_lp_rc32k_save_code(HBN_Get_RC32K_R_Code());
     /* rc32k status: not ready */
     iot2lp_para->rc32k_trim_parameter->rc32k_clock_ready = 0;
     iot2lp_para->rc32k_trim_parameter->rc32k_trim_ready = 0;
@@ -967,8 +966,7 @@ int ATTR_TCM_SECTION bl_lp_fw_enter(bl_lp_fw_cfg_t *bl_lp_fw_cfg)
 
     /* watch-dog disable */
 
-    /* rc32k code restored */
-    HBN_Set_RC32K_R_Code(iot2lp_para->rc32k_trim_parameter->rc32k_fr_ext);
+    bl_lp_rc32k_restore_code(iot2lp_para->rc32k_trim_parameter->rc32k_fr_ext);
 
     /* lpfw firmware has already set the DCDC voltage */
     // bl_ext_dcdc_pds_restore_exit();

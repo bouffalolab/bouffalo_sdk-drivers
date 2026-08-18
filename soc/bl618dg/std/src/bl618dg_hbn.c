@@ -691,6 +691,29 @@ uint32_t ATTR_CLOCK_SECTION HBN_Get_RC32K_R_Code(void)
     return r_code;
 }
 
+BL_Err_Type ATTR_CLOCK_SECTION HBN_Set_RC32K_Half_MSB(uint8_t enable)
+{
+    const uint32_t half_msb_mask = 1UL << (AON_RESV_AON_POS + 1U);
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(AON_BASE, AON_1);
+    if (enable) {
+        tmpVal |= half_msb_mask;
+    } else {
+        tmpVal &= ~half_msb_mask;
+    }
+    BL_WR_REG(AON_BASE, AON_1, tmpVal);
+
+    return SUCCESS;
+}
+
+uint8_t ATTR_CLOCK_SECTION HBN_Get_RC32K_Half_MSB(void)
+{
+    const uint32_t half_msb_mask = 1UL << (AON_RESV_AON_POS + 1U);
+
+    return (BL_RD_REG(AON_BASE, AON_1) & half_msb_mask) != 0U;
+}
+
 /****************************************************************************/ /**
  * @brief  Trim RC32K According to Efuse
  *

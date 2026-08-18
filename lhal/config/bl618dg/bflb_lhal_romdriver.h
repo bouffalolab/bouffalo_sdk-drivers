@@ -643,6 +643,7 @@ typedef enum {
     ((int32_t (*)(uint8_t *chip_type, uint8_t *chip_version)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_get_chip_type])
 
+#if 0
 #define romapi_bflb_dac_init \
     ((void (*)(struct bflb_device_s *dev, uint8_t clk_div)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_dac_init])
@@ -666,6 +667,7 @@ typedef enum {
 #define romapi_bflb_dac_set_value \
     ((void (*)(struct bflb_device_s *dev, uint8_t ch, uint16_t value)) \
     ROM_APITABLE[BFLB_LHAL_ROMAPI_INDEX_bflb_dac_set_value])
+#endif
 
 #define romapi_bflb_dbi_init \
     ((void (*)(struct bflb_device_s *dev, const struct bflb_dbi_config_s *config)) \

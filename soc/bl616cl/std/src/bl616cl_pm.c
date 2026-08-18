@@ -314,6 +314,21 @@ uint32_t flash_offset = 0;
 
 spi_flash_cfg_type *flash_cfg;
 
+uint8_t ATTR_TCM_SECTION pm_get_sf_pin_select(void)
+{
+    uint32_t sf_pin_select;
+
+    sf_pin_select = (BL_RD_WORD(0x20056000 + 0x74) >> 5) & 0x3f;
+
+    if (sf_pin_select == 0x3f) {
+        return SF_IO_EXT_SF2;
+    } else if (sf_pin_select == 0x0A) {
+        return SF_IO_EXT_SF3;
+    } else {
+        return (uint8_t)sf_pin_select;
+    }
+}
+
 static int is_flash_io(uint8_t pin, uint32_t sf_pin_select)
 {
     if (sf_pin_select & (1 << 2)) {
@@ -1219,10 +1234,7 @@ int pm_lowpower_gpio_cfg(lp_gpio_cfg_type *gpio_cfg)
     uint8_t trig_mode = 0;
     uint32_t sf_pin_select;
 
-    sf_pin_select = (BL_RD_WORD(0x20056000 + 0x74) >> 5) & 0x3f;
-    if (sf_pin_select == 0x3f) {
-        sf_pin_select = SF_IO_EXT_SF2;
-    }
+    sf_pin_select = pm_get_sf_pin_select();
 
     for (uint8_t i = 0; i < GPIO_PIN_MAX; i++) {
         io = i;
@@ -1415,7 +1427,6 @@ void pm_pds_mode_enter(uint32_t pds_level, uint32_t sleep_time, const PM_LOWPOWE
 
 void ATTR_TCM_SECTION pm_pds_enable(uint32_t *cfg, const PM_LOWPOWER_CFG_Type *lowpower_cfg)
 {
-    uint32_t tmpVal = 0;
     uint32_t sf_pin_select = 0;
     PM_PDS_CFG_Type *p = (PM_PDS_CFG_Type *)cfg;
     PDS_DEFAULT_LV_CFG_Type *pPdsCfg = NULL;
@@ -1525,24 +1536,18 @@ void ATTR_TCM_SECTION pm_pds_enable(uint32_t *cfg, const PM_LOWPOWER_CFG_Type *l
     }
 
     if (p->pdsLdo18ioPowerDown || p->powerDownFlash) {
-        /* get sw uasge 0 */
-        // EF_Ctrl_Read_Sw_Usage(0, (uint32_t *)&tmpVal);
-        tmpVal = BL_RD_WORD(0x20056000 + 0x74);
-        /* get flash type */
-        sf_pin_select = (tmpVal >> 5) & 0x3f;
-        if (sf_pin_select == 0x3f) {
-            sf_pin_select = SF_IO_EXT_SF2;
-        } else {
-        }
+        sf_pin_select = pm_get_sf_pin_select();
         HBN_Power_Down_Flash((spi_flash_cfg_type *)p->flashCfg);
 
         /* latch flash io pad */
         if (sf_pin_select & (1 << 2)) {
             for (uint8_t i = GPIO_PIN_6; i <= GPIO_PIN_11; i++) {
+                *((volatile uint32_t *)(0x200008C4 + i * 4)) = 0;
                 PDS_Enable_GPIO_Keep(i);
             }
         } else if (sf_pin_select & (1 << 3)) {
             for (uint8_t i = GPIO_PIN_24; i <= GPIO_PIN_29; i++) {
+                *((volatile uint32_t *)(0x200008C4 + i * 4)) = 0;
                 PDS_Enable_GPIO_Keep(i);
             }
         } else {

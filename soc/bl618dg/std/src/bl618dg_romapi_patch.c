@@ -464,6 +464,29 @@ BL_Err_Type ATTR_TCM_SECTION HBN_Set_Ldo09_Aon_Force_Off(uint8_t enable)
     return SUCCESS;
 }
 
+BL_Err_Type ATTR_CLOCK_SECTION HBN_Set_RC32K_Half_MSB(uint8_t enable)
+{
+    const uint32_t half_msb_mask = 1UL << (AON_RESV_AON_POS + 1U);
+    uint32_t tmpVal;
+
+    tmpVal = BL_RD_REG(AON_BASE, AON_1);
+    if (enable) {
+        tmpVal |= half_msb_mask;
+    } else {
+        tmpVal &= ~half_msb_mask;
+    }
+    BL_WR_REG(AON_BASE, AON_1, tmpVal);
+
+    return SUCCESS;
+}
+
+uint8_t ATTR_CLOCK_SECTION HBN_Get_RC32K_Half_MSB(void)
+{
+    const uint32_t half_msb_mask = 1UL << (AON_RESV_AON_POS + 1U);
+
+    return (BL_RD_REG(AON_BASE, AON_1) & half_msb_mask) != 0U;
+}
+
 uint32_t bflb_ef_ctrl_get_common_trim_list(const bflb_ef_ctrl_com_trim_cfg_t **ptrim_list)
 {
     *ptrim_list = &trim_list[0];

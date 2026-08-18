@@ -4,6 +4,7 @@
 #include "bflb_sf_ctrl.h"
 #include "bflb_sf_cfg.h"
 #include "bl618dg_clock.h"
+#include "bl618dg_pm.h"
 #include "bl618dg_xip_recovery.h"
 #include "tzc_sec_reg.h"
 #include "bl618dg_lp.h"
@@ -166,7 +167,7 @@ void bl_lp_xip_para_save(void)
     g_flash_para.flash_clk = flash_clk;
     g_flash_para.flash_clk_div = flash_clk_div;
     g_flash_para.flash_offset = bflb_sf_ctrl_get_flash_image_offset(0, SF_CTRL_FLASH_BANK0);
-    g_flash_para.flash_pin_cfg = (BL_RD_WORD(0x2000C000 + 0x5C) >> 14) & 0x3F;
+    g_flash_para.flash_pin_cfg = pm_get_sf_pin_select();
 
     /* flash io cs clk delay info save */
     bflb_sf_ctrl_get_flash_io_cs_clk_delay((struct bflb_sf_ctrl_io_cs_clk_delay_cfg *)&io_cs_delay_cfg);

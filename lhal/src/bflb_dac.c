@@ -1,9 +1,9 @@
 #include "bflb_dac.h"
 #include "hardware/dac_reg.h"
 
-#if defined(BL702) || defined(BL602) || defined(BL702L)
+#if defined(BL702) || defined(BL602)
 #define DAC_GPIP_BASE ((uint32_t)0x40002000)
-#elif defined(BL616) || defined(BL616CL) || defined(BL618DG)   
+#elif defined(BL616)
 #define DAC_GPIP_BASE ((uint32_t)0x20002000)
 #endif
 
@@ -194,5 +194,27 @@ void bflb_dac_set_value(struct bflb_device_s *dev, uint8_t ch, uint16_t value)
     }
 
     putreg32(regval, reg_base + GLB_GPDAC_DATA_OFFSET);
+#endif
+}
+
+void bflb_dac_set_reference(struct bflb_device_s *dev, uint8_t ref)
+{
+    LHAL_PARAM_ASSERT(IS_DAC_REF_TYPE(ref));
+
+#ifdef romapi_bflb_dac_set_reference
+    romapi_bflb_dac_set_reference(dev, ref);
+#else
+    uint32_t regval;
+    uint32_t reg_base;
+
+    reg_base = dev->reg_base;
+
+    regval = getreg32(reg_base + GLB_GPDAC_CTRL_OFFSET);
+    if (ref == DAC_VREF_EXTERNAL) {
+        regval |= GLB_GPDAC_REF_SEL;
+    } else {
+        regval &= ~GLB_GPDAC_REF_SEL;
+    }
+    putreg32(regval, reg_base + GLB_GPDAC_CTRL_OFFSET);
 #endif
 }

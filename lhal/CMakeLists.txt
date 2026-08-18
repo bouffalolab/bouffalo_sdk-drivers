@@ -109,7 +109,6 @@ elseif("${CHIP}" STREQUAL "bl618dg")
         src/bflb_clock.c
         src/bflb_reset.c
         src/bflb_adc_v3.c
-        src/bflb_dac.c
         src/bflb_emac_v2.c
         src/bflb_ir.c
         src/bflb_mjpeg.c

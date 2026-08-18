@@ -864,6 +864,21 @@ char *pm_get_trig_mode_desc(int index)
     return trig_mode_desc[index];
 }
 
+uint8_t ATTR_TCM_SECTION pm_get_sf_pin_select(void)
+{
+    uint32_t sf_pin_select;
+
+    sf_pin_select = (BL_RD_WORD(0x2000C000 + 0x5C) >> 14) & 0x3f;
+
+    if (sf_pin_select == 0x3f) {
+        return SF_IO_EXT_SF2;
+    } else if (sf_pin_select == 0x0A) {
+        return SF_IO_EXT_SF3;
+    } else {
+        return (uint8_t)sf_pin_select;
+    }
+}
+
 /****************************************************************************/ /**
  * @brief  pm pds enable
  *
@@ -874,7 +889,7 @@ char *pm_get_trig_mode_desc(int index)
 *******************************************************************************/
 void ATTR_TCM_SECTION pm_pds_enable(uint32_t *cfg)
 {
-    //uint32_t sf_pin_select = 0;
+    uint32_t sf_pin_select = 0;
     PM_PDS_CFG_Type *p = (PM_PDS_CFG_Type *)cfg;
     PDS_DEFAULT_LV_CFG_Type *pPdsCfg = NULL;
     uintptr_t irq_flag;
@@ -945,8 +960,7 @@ void ATTR_TCM_SECTION pm_pds_enable(uint32_t *cfg)
     }
 
     if (p->powerDownFlash) {
-        /* get sw uasge 0,get flash type */
-        //sf_pin_select = (BL_RD_WORD(0x2000C000 + 0x60) >>14) &0x3f;
+        sf_pin_select = pm_get_sf_pin_select();
         HBN_Power_Down_Flash((spi_flash_cfg_type *)p->flashCfg);
 
         /* power off flash */
@@ -1026,8 +1040,8 @@ void ATTR_TCM_SECTION pm_pds_enable(uint32_t *cfg)
 
     if (p->powerDownFlash) {
         if (p->pdsLevel < PM_PDS_LEVEL_2) {
-            /* Init flash gpio, remove, for CPU wakeup case, GLB is not powered off */
-            //bflb_sf_cfg_init_flash_gpio((uint8_t)sf_pin_select, 1);
+            /* Init flash gpio */
+            bflb_sf_cfg_init_flash_gpio((uint8_t)sf_pin_select, 1);
 
             bflb_sf_ctrl_set_owner(SF_CTRL_OWNER_SAHB);
             bflb_sflash_restore_from_powerdown((spi_flash_cfg_type *)p->flashCfg, 0, SF_CTRL_FLASH_BANK0);

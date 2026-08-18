@@ -293,6 +293,11 @@ static const ATTR_TCM_CONST_SECTION Flash_Info_t flash_infos[] = {
         //.name="xm_uh32d_32_33",
         .cfg = &flash_cfg_winb_16jv,
     },
+    {
+        .jedec_id = 0x21609d,
+        //.name="issi_25lp01g_33",
+        .cfg = &flash_cfg_issi_25lp256,
+    },
 };
 
 static const ATTR_TCM_CONST_SECTION struct flash_params_s flash_secreg_infos[] = {

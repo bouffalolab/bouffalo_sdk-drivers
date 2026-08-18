@@ -4,6 +4,7 @@
 #include "bflb_sf_ctrl.h"
 #include "bflb_sf_cfg.h"
 #include "bl616cl_clock.h"
+#include "bl616cl_pm.h"
 #include "bl616cl_xip_recovery.h"
 #include "tzc_sec_reg.h"
 #include "bl616cl_lp.h"
@@ -72,19 +73,6 @@ static void bl_lp_xip_get_flash_clock(uint8_t *flash_clk, uint8_t *flash_clk_div
     *flash_clk_div = Clock_Get_SF_Div_Val();
 }
 
-static uint8_t bl_lp_xip_get_flash_pin_cfg(void)
-{
-    uint32_t flash_pin_cfg;
-
-    flash_pin_cfg = (BL_RD_WORD(0x20056000 + 0x74) >> 5) & 0x3F;
-
-    if (flash_pin_cfg == 0x3F) {
-        return SF_IO_EXT_SF2;
-    } else {
-        return (uint8_t)flash_pin_cfg;
-    }
-}
-
 static void bl_lp_tzc_para_save(void)
 {
     iot2lp_para->tzc_cfg = &tzc_info;
@@ -107,7 +95,7 @@ void bl_lp_xip_para_save(void)
     g_flash_para.flash_clk = flash_clk;
     g_flash_para.flash_clk_div = flash_clk_div;
     g_flash_para.flash_offset = bflb_sf_ctrl_get_flash_image_offset(0, SF_CTRL_FLASH_BANK0);
-    g_flash_para.flash_pin_cfg = bl_lp_xip_get_flash_pin_cfg();
+    g_flash_para.flash_pin_cfg = pm_get_sf_pin_select();
 
     /* flash io cs clk delay info save */
     bflb_sf_ctrl_get_flash_io_cs_clk_delay((struct bflb_sf_ctrl_io_cs_clk_delay_cfg *)&io_cs_delay_cfg);
@@ -201,6 +189,17 @@ void ATTR_TCM_SECTION bl_lp_xip_recovery(void)
     /* power on flash power */
     /* dcdc18 Always On */
     AON_LDO18_IO_Switch_Flash(1);
+
+    if (p_flash_para->flash_pin_cfg & (1 << 2)) {
+        for (uint8_t i = GPIO_PIN_6; i <= GPIO_PIN_11; i++) {
+            pm_disable_gpio_keep(i);
+        }
+    } else if (p_flash_para->flash_pin_cfg & (1 << 3)) {
+        for (uint8_t i = GPIO_PIN_24; i <= GPIO_PIN_29; i++) {
+            pm_disable_gpio_keep(i);
+        }
+    } else {
+    }
 
     /* init flash gpio */
     bflb_sf_cfg_init_flash_gpio(p_flash_para->flash_pin_cfg, 0);
