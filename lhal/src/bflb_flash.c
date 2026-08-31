@@ -28,6 +28,10 @@
 #include "hardware/sf_ctrl_reg.h"
 #include "bflb_efuse.h"
 
+#if defined(CONFIG_FLASH_AUTO_2LINE_FALLBACK) && defined(CONFIG_FLASH_2LINE)
+#error CONFIG_FLASH_AUTO_2LINE_FALLBACK cannot be used with CONFIG_FLASH_2LINE
+#endif
+
 #if defined(BL616) || defined(BL616CL) || defined(BL618DG)
 static uint32_t flash1_size = 4 * 1024 * 1024;
 static uint32_t flash2_size = 2 * 1024 * 1024;
@@ -36,6 +40,7 @@ static uint32_t g_jedec_id2 = 0;
 #endif
 #endif
 static uint32_t g_jedec_id = 0;
+static uint8_t g_flash_2line_fallback = 0;
 
 __WEAK int ATTR_TCM_SECTION bflb_flash_resource_lock(uint32_t timeout_ms)
 {
@@ -369,6 +374,75 @@ static void ATTR_TCM_SECTION flash_set_l1c_wrap(spi_flash_cfg_type *p_flash_cfg)
     }
 }
 
+#ifdef BFLB_FLASH_AUTO_2LINE_FALLBACK_ENABLED
+/* Verify a requested read mode against data already read through NIO. */
+static int ATTR_TCM_SECTION flash_verify_read_mode(spi_flash_cfg_type *flash_cfg, uint8_t read_mode,
+                                                   const uint32_t *nio_data)
+{
+    uint32_t mode_data[8];
+    int ret;
+
+    ret = bflb_sflash_read(flash_cfg, read_mode, 0, 0,
+                           (uint8_t *)mode_data, sizeof(mode_data));
+    if (ret != 0 || arch_memcmp(nio_data, mode_data, sizeof(mode_data)) != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Validate the table-selected quad mode and fall back to dual or NIO. */
+static int ATTR_TCM_SECTION flash_verify_and_select_read_mode(spi_flash_cfg_type *flash_cfg)
+{
+    uint32_t nio_data[8];
+    uint8_t io_mode = flash_cfg->io_mode & 0x0f;
+    int ret;
+
+    if (io_mode != SF_CTRL_QO_MODE && io_mode != SF_CTRL_QIO_MODE) {
+        return 0;
+    }
+
+#ifdef BFLB_SF_CTRL_32BITS_ADDR_ENABLE
+    if (flash_cfg->io_mode & 0x20) {
+        ret = bflb_sflash_set_32bits_addr_mode(flash_cfg, 1);
+        if (ret != 0) {
+            return ret;
+        }
+    }
+#endif
+
+    ret = bflb_sflash_read(flash_cfg, SF_CTRL_NIO_MODE, 0, 0,
+                           (uint8_t *)nio_data, sizeof(nio_data));
+    if (ret != 0) {
+        return ret;
+    }
+
+    if (bflb_sflash_qspi_enable(flash_cfg) == 0 &&
+        flash_verify_read_mode(flash_cfg, io_mode, nio_data) == 0) {
+        return 0;
+    }
+
+    if (flash_cfg->c_read_support & 0x01) {
+        flash_cfg->io_mode = (flash_cfg->io_mode & ~0x1f) | 0x10 | SF_CTRL_DIO_MODE;
+        if (flash_verify_read_mode(flash_cfg, SF_CTRL_DIO_MODE, nio_data) == 0) {
+            g_flash_2line_fallback = 1;
+            return 0;
+        }
+    }
+
+    flash_cfg->c_read_support = 0;
+    flash_cfg->io_mode = (flash_cfg->io_mode & ~0x1f) | 0x10 | SF_CTRL_DO_MODE;
+    if (flash_verify_read_mode(flash_cfg, SF_CTRL_DO_MODE, nio_data) == 0) {
+        g_flash_2line_fallback = 1;
+        return 0;
+    }
+
+    flash_cfg->io_mode = (flash_cfg->io_mode & ~0x1f) | 0x10 | SF_CTRL_NIO_MODE;
+
+    return -1;
+}
+#endif
+
 #if defined(BL616) || defined(BL616CL) || defined(BL618DG)
 static void ATTR_TCM_SECTION bflb_flash_set_cmds(spi_flash_cfg_type *p_flash_cfg)
 {
@@ -380,7 +454,12 @@ static void ATTR_TCM_SECTION bflb_flash_set_cmds(spi_flash_cfg_type *p_flash_cfg
     cmds_cfg.cmds_wrap_mode = 1;
     cmds_cfg.cmds_wrap_len = 9;
 
-    if ((p_flash_cfg->io_mode & 0x1f) == SF_CTRL_QIO_MODE) {
+    if ((p_flash_cfg->io_mode & 0x1f) == SF_CTRL_QIO_MODE
+#if defined(BL618DG)
+        || (p_flash_cfg->io_mode & 0x0f) == SF_CTRL_DO_MODE
+        || (p_flash_cfg->io_mode & 0x0f) == SF_CTRL_DIO_MODE
+#endif
+    ) {
         cmds_cfg.cmds_wrap_mode = 2;
         cmds_cfg.cmds_wrap_len = 2;
     }
@@ -433,6 +512,11 @@ static int ATTR_TCM_SECTION flash_config_init(spi_flash_cfg_type *p_flash_cfg, u
     p_flash_cfg->c_read_support = 0x01;
 #endif
 #endif
+#ifdef BFLB_FLASH_AUTO_2LINE_FALLBACK_ENABLED
+    if (ret == 0) {
+        ret = flash_verify_and_select_read_mode(p_flash_cfg);
+    }
+#endif
     /* Set flash controler from p_flash_cfg */
 #if defined(BL616) || defined(BL616CL) || defined(BL618DG)
     bflb_flash_set_cmds(p_flash_cfg);
@@ -459,6 +543,8 @@ int ATTR_TCM_SECTION bflb_flash_init(void)
 {
     int ret = -1;
     uint32_t jedec_id = 0;
+
+    g_flash_2line_fallback = 0;
 #if defined(BL602) || defined(BL702)
     uint8_t clk_delay = 1;
     uint8_t clk_invert = 1;
@@ -513,6 +599,13 @@ int ATTR_TCM_SECTION bflb_flash_init(void)
         if (ret == 0) {
             g_jedec_id = jedec_id;
             g_flash_cfg.mid = (jedec_id & 0xff);
+            /* Keep the controller's active read mode and the table's address mode. */
+            uint8_t io_mode = (getreg32(BFLB_SF_CTRL_BASE + SF_CTRL_SF_IF_IAHB_0_OFFSET) &
+                               SF_CTRL_SF_IF_1_SPI_MODE_MASK) >> SF_CTRL_SF_IF_1_SPI_MODE_SHIFT;
+            g_flash_cfg.io_mode = (g_flash_cfg.io_mode & ~0x0f) | io_mode;
+            if (io_mode != SF_CTRL_QIO_MODE) {
+                g_flash_cfg.io_mode |= 0x10;
+            }
             flash_get_clock_delay(&g_flash_cfg);
 #if defined(BL616) || defined(BL616CL) || defined(BL618DG)
             flash1_size = flash_get_size_from_jedecid(g_jedec_id);
@@ -543,6 +636,11 @@ int ATTR_TCM_SECTION bflb_flash_init(void)
 uint32_t bflb_flash_get_jedec_id(void)
 {
     return g_jedec_id;
+}
+
+uint8_t bflb_flash_is_2line_fallback(void)
+{
+    return g_flash_2line_fallback;
 }
 
 uint32_t bflb_flash_get_size(void)

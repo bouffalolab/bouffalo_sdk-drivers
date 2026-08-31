@@ -202,6 +202,8 @@ void System_Post_Init(void)
     csi_icache_invalid();
 #endif
 
+    AON_LDO18_IO_Switch_Efuse(0);
+
     sysinit_run_all();
 
 #ifndef CONFIG_FREERTOS

@@ -98,7 +98,6 @@ struct wl_param_pwrcal_t
     int8_t      channel_lp_pwrcomp_wlan[NUM_WLAN_CHANNELS]; // power compensation at low power mode
     int8_t      channel_5g_pwrcomp_wlan[8];
     int8_t      channel_5g_lp_pwrcomp_wlan[8]; // power compensation at low power mode
-    int8_t      Temperature_MP; // temperature of sensor while power cal at production line
     int8_t      channel_pwrcomp_bz[NUM_BZ_CH_PWRCOMP];
     int8_t      channel_lp_pwrcomp_bz[NUM_BZ_CH_PWRCOMP];
     int8_t      channel_pwrcomp_bz_only[NUM_BZ_CH_PWRCOMP];
@@ -139,7 +138,7 @@ struct wl_param_pwrlimit_t
 
 struct wl_efuse_t
 {
-    uint8_t     device_info;
+    uint8_t     device_info; // QFN48,QFN56,QFN68
     uint8_t     chip_version;
     uint8_t     iptat_code;
     uint8_t     icx_code;
@@ -185,12 +184,6 @@ struct wl_env_t
     uint8_t  lp_status;
 };
 
-typedef enum
-{
-    WL_DEVICE_QFN40 = 0,
-    WL_DEVICE_QFN40M,
-    WL_DEVICE_QFN56
-} wl_device_info_t;
 
 typedef enum
 {
@@ -244,7 +237,6 @@ struct wl_cfg_t
     int (*log_printf)(const char *format, ...);
 
     uint8_t     log_level;
-    uint8_t     device_info; // QFN48,QFN56,QFN68
 };
 
 /**
@@ -353,13 +345,14 @@ void wl_rf_set_bz_channel_pwr_comp(void);
 void wl_rf_set_status(uint8_t combo_rf_en);// turn on/off combo rf domain
 void wl_standalone_rf_set_status(uint8_t standalone_rf_en);// turn on/off standalone rf domain
 void wl_rf_temp_optimize(int16_t temperature); // rf optimize for temperature
+void wl_set_ch_rfcal(uint8_t do_cal);
 
 // config for rf 
 
 // *BZ_STAND_ALONE_RF_EN=1 : standalone-bz rf and combo-bz rf both enable, but default bz rf is standalone bz rf 
 // *BZ_STAND_ALONE_RF_EN=0 : combo-bz rf both enable, and disable stand-alone bz rf 
 #ifndef BZ_STAND_ALONE_RF_EN
-#define BZ_STAND_ALONE_RF_EN (1)
+#define BZ_STAND_ALONE_RF_EN (0)
 #endif
 
 // if build the LPFW, please define 1 
@@ -400,6 +393,7 @@ uint32_t wl_cal_read(void);
  * @return const char* Version string in format "YYYY-MM-DD commit_hash" or "YYYY-MM-DD commit_hash (dirty)"
  */
 const char* wl_get_version(void);
+void wl_bz_standalone(void);
+void wl_bz_combo(void);
 
 #endif
-

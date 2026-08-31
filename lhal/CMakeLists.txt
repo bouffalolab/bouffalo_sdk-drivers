@@ -177,6 +177,16 @@ sdk_library_add_sources(config/${CHIP}/device_table.c)
 string(TOUPPER ${CHIP} CHIPNAME)
 sdk_add_compile_definitions(-D${CHIPNAME})
 
+if(CONFIG_FLASH_AUTO_2LINE_FALLBACK)
+    if(("${CHIP}" STREQUAL "bl616") OR
+       ("${CHIP}" STREQUAL "bl616cl") OR
+       ("${CHIP}" STREQUAL "bl618dg"))
+        sdk_add_private_compile_definitions(BFLB_FLASH_AUTO_2LINE_FALLBACK_ENABLED)
+    else()
+        message(STATUS "FLASH_AUTO_2LINE_FALLBACK is not supported on ${CHIP}")
+    endif()
+endif()
+
 if(CPU_ID)
     string(TOUPPER ${CPU_ID} CPU_ID_NAME)
     sdk_add_compile_definitions(-DCPU_${CPU_ID_NAME})

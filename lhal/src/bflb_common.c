@@ -469,6 +469,24 @@ __WEAK uint32_t ATTR_TCM_SECTION bflb_soft_crc32(void *in, uint32_t len)
 #endif
 }
 
+__WEAK int32_t bflb_get_anti_rollback_enable(uint8_t *enabled)
+{
+#if defined(BL616) || defined(BL702L) || defined(BL618DG) || defined(BL616CL)
+    uint32_t value;
+
+    if (enabled == NULL) {
+        return 1;
+    }
+
+    bflb_ef_ctrl_read_direct(NULL, ANTI_ROLLBACK_ENABLE_OFFSET, &value, 1, 1);
+    *enabled = (value >> ANTI_ROLLBACK_ENABLE_POS) & ANTI_ROLLBACK_ENABLE_MASK;
+
+    return 0;
+#else
+    return 1;
+#endif
+}
+
 __WEAK int32_t bflb_get_app_version_from_efuse(uint8_t *version)
 {
 #ifdef romapi_bflb_get_app_version_from_efuse

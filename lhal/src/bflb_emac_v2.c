@@ -116,17 +116,50 @@ struct bflb_emac_v2_handle_s {
     uint32_t rx_length_errors;
 };
 
-static struct bflb_emac_v2_handle_s eth_handle;
-static struct bflb_emac_v2_handle_s *thiz = NULL;
+#ifndef CONFIG_EMAC_DEV_COUNT
+#define EMAC_V2_DEVICE_COUNT 1
+#elif CONFIG_EMAC_DEV_COUNT > 2
+#error "EMAC_V2_DEVICE_COUNT must be 1 or 2"
+#else
+#define EMAC_V2_DEVICE_COUNT CONFIG_EMAC_DEV_COUNT
+#endif
 
-static ATTR_NOCACHE_NOINIT_RAM_SECTION __attribute__((aligned(4))) struct bflb_emac_v2_dma_desc_s tx_dma_desc[EMAC_TX_BD_NUM_MAX];
-static ATTR_NOCACHE_NOINIT_RAM_SECTION __attribute__((aligned(4))) struct bflb_emac_v2_dma_desc_s rx_dma_desc[EMAC_RX_BD_NUM_MAX];
+struct bflb_emac_v2_ctx_s {
+    struct bflb_emac_v2_handle_s handle;
+    struct bflb_device_s *dev;
+    bflb_emac_irq_cb_t irq_event_cb;
+    void *irq_arg;
+    bool initialized;
+};
 
-static void bflb_emac_v2_isr(int irq, void *arg);
+static struct bflb_emac_v2_ctx_s emac_v2_contexts[EMAC_V2_DEVICE_COUNT];
 
-/* isr event callback */
-static void *emac_irq_arg = NULL;
-static bflb_emac_irq_cb_t emac_irq_event_cb = NULL;
+static ATTR_NOCACHE_NOINIT_RAM_SECTION __attribute__((aligned(4)))
+    struct bflb_emac_v2_dma_desc_s tx_dma_desc[EMAC_V2_DEVICE_COUNT][EMAC_TX_BD_NUM_MAX];
+static ATTR_NOCACHE_NOINIT_RAM_SECTION __attribute__((aligned(4)))
+    struct bflb_emac_v2_dma_desc_s rx_dma_desc[EMAC_V2_DEVICE_COUNT][EMAC_RX_BD_NUM_MAX];
+
+static uint32_t emac_v2_active_mask;
+static uint8_t emac_v2_shared_irq_num = 0xff;
+
+static struct bflb_emac_v2_ctx_s *bflb_emac_v2_ctx_from_dev(struct bflb_device_s *dev)
+{
+    if (dev == NULL || dev->dev_type != BFLB_DEVICE_TYPE_EMAC_V2 || dev->idx >= EMAC_V2_DEVICE_COUNT) {
+        return NULL;
+    }
+
+    return &emac_v2_contexts[dev->idx];
+}
+
+static struct bflb_emac_v2_handle_s *bflb_emac_v2_handle_from_dev(struct bflb_device_s *dev)
+{
+    struct bflb_emac_v2_ctx_s *ctx = bflb_emac_v2_ctx_from_dev(dev);
+
+    return ctx == NULL ? NULL : &ctx->handle;
+}
+
+static void bflb_emac_v2_handle_irq(struct bflb_emac_v2_ctx_s *ctx);
+static void bflb_emac_v2_shared_isr(int irq, void *arg);
 
 /**
  * @brief bflb emac_v2 enable the watchdog timer on the receiver.
@@ -1630,9 +1663,9 @@ int bflb_emac_v2_dma_desc_init(struct bflb_device_s *dev,
                                struct bflb_emac_v2_dma_desc_s *tx_dma_desc, uint8_t *tx_buff, uint32_t tx_dma_desc_cnt,
                                struct bflb_emac_v2_dma_desc_s *rx_dma_desc, uint8_t *rx_buff, uint32_t rx_dma_desc_cnt)
 {
-    thiz = &eth_handle;
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
 
-    return bflb_emac_v2_dma_desc_list_init(dev, thiz, tx_dma_desc, tx_buff, tx_dma_desc_cnt,
+    return bflb_emac_v2_dma_desc_list_init(dev, handle, tx_dma_desc, tx_buff, tx_dma_desc_cnt,
                                            rx_dma_desc, rx_buff, rx_dma_desc_cnt);
 }
 
@@ -1659,8 +1692,10 @@ int bflb_emac_v2_get_tx_qptr(struct bflb_device_s *dev, uint32_t *status, uint32
                              uint32_t *data1, uint32_t *buffer2, uint32_t *length2, uint32_t *data2,
                              uint32_t *ext_status, uint32_t *time_stamp_high, uint32_t *time_stamp_low)
 {
-    int txover = thiz->tx_index_emac_v2;
-    struct bflb_emac_v2_dma_desc_s *txdesc = thiz->tx_dma_desc + thiz->tx_index_emac_v2;
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
+
+    int txover = handle->tx_index_emac_v2;
+    struct bflb_emac_v2_dma_desc_s *txdesc = handle->tx_dma_desc + handle->tx_index_emac_v2;
 
     EMAC_V2_DRV_DBG("Check txdesc sts=%08x,len=%08x\r\n", txdesc->status, txdesc->length);
 
@@ -1707,11 +1742,11 @@ int bflb_emac_v2_get_tx_qptr(struct bflb_device_s *dev, uint32_t *status, uint32
     }
 
     bflb_emac_v2_tx_dma_desc_init(txdesc, bflb_emac_v2_is_last_tx_desc(txdesc));
-    thiz->tx_index_emac_v2 = bflb_emac_v2_is_last_tx_desc(txdesc) ? 0 : txover + 1;
-    //txdesc = thiz->tx_dma_desc + thiz->tx_index_emac_v2;
+    handle->tx_index_emac_v2 = bflb_emac_v2_is_last_tx_desc(txdesc) ? 0 : txover + 1;
+    //txdesc = handle->tx_dma_desc + handle->tx_index_emac_v2;
 
     /* busy tx descriptor is reduced by one after it is fully reclaimed */
-    (thiz->tx_busy_cnt)--;
+    (handle->tx_busy_cnt)--;
 
     return txover;
 }
@@ -1736,15 +1771,17 @@ int bflb_emac_v2_get_tx_qptr(struct bflb_device_s *dev, uint32_t *status, uint32
 int bflb_emac_v2_set_tx_qptr(struct bflb_device_s *dev, uint32_t buffer1, uint32_t length1, uint32_t data1,
                              uint32_t buffer2, uint32_t length2, uint32_t data2, uint32_t offload_needed)
 {
-    int txnext = thiz->tx_index_cpu;
-    struct bflb_emac_v2_dma_desc_s *txdesc = thiz->tx_dma_desc + thiz->tx_index_cpu;
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
+
+    int txnext = handle->tx_index_cpu;
+    struct bflb_emac_v2_dma_desc_s *txdesc = handle->tx_dma_desc + handle->tx_index_cpu;
 
     if (!bflb_emac_v2_is_desc_empty(txdesc)) {
         return -1;
     }
 
     /* busy tx descriptor is incremented by one as it will be handed over to DMA */
-    (thiz->tx_busy_cnt)++;
+    (handle->tx_busy_cnt)++;
 
     txdesc->length |= (((length1 << EMAC_V2_DESC_SIZE1_SHIFT) & EMAC_V2_DESC_SIZE1_MASK) | ((length2 << EMAC_V2_DESC_SIZE2_SHIFT) & EMAC_V2_DESC_SIZE2_MASK));
     txdesc->status |= (EMAC_V2_DESC_TX_FIRST | EMAC_V2_DESC_TX_LAST | EMAC_V2_DESC_TX_INT_ENABLE);
@@ -1768,7 +1805,7 @@ int bflb_emac_v2_set_tx_qptr(struct bflb_device_s *dev, uint32_t buffer1, uint32
 
     txdesc->status |= EMAC_V2_DESC_OWN_BY_DMA;
 
-    thiz->tx_index_cpu = bflb_emac_v2_is_last_tx_desc(txdesc) ? 0 : txnext + 1;
+    handle->tx_index_cpu = bflb_emac_v2_is_last_tx_desc(txdesc) ? 0 : txnext + 1;
 
     return txnext;
 }
@@ -1790,8 +1827,10 @@ int bflb_emac_v2_set_tx_qptr(struct bflb_device_s *dev, uint32_t buffer1, uint32
 int bflb_emac_v2_set_rx_qptr(struct bflb_device_s *dev, uint32_t buffer1, uint32_t length1, uint32_t data1,
                              uint32_t buffer2, uint32_t length2, uint32_t data2)
 {
-    int rxnext = thiz->rx_index_cpu;
-    struct bflb_emac_v2_dma_desc_s *rxdesc = thiz->rx_dma_desc + thiz->rx_index_cpu;
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
+
+    int rxnext = handle->rx_index_cpu;
+    struct bflb_emac_v2_dma_desc_s *rxdesc = handle->rx_dma_desc + handle->rx_index_cpu;
 
 #if 0
     if (!bflb_emac_v2_is_desc_empty(rxdesc)) {
@@ -1810,10 +1849,10 @@ int bflb_emac_v2_set_rx_qptr(struct bflb_device_s *dev, uint32_t buffer1, uint32
     rxdesc->data2 = data2;
     rxdesc->status |= EMAC_V2_DESC_OWN_BY_DMA;
 
-    thiz->rx_index_cpu = bflb_emac_v2_is_last_rx_desc(rxdesc) ? 0 : rxnext + 1;
+    handle->rx_index_cpu = bflb_emac_v2_is_last_rx_desc(rxdesc) ? 0 : rxnext + 1;
 
     /* idle rx descriptor is incremented by one as it will be handed over to DMA */
-    (thiz->rx_idle_cnt)++;
+    (handle->rx_idle_cnt)++;
 
     return rxnext;
 }
@@ -1840,8 +1879,10 @@ int bflb_emac_v2_get_rx_qptr(struct bflb_device_s *dev, uint32_t *status, uint32
                              uint32_t *data1, uint32_t *buffer2, uint32_t *length2, uint32_t *data2,
                              uint32_t *ext_status, uint32_t *time_stamp_high, uint32_t *time_stamp_low)
 {
-    int rxnext = thiz->rx_index_emac_v2;
-    struct bflb_emac_v2_dma_desc_s *rxdesc = thiz->rx_dma_desc + thiz->rx_index_emac_v2;
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
+
+    int rxnext = handle->rx_index_emac_v2;
+    struct bflb_emac_v2_dma_desc_s *rxdesc = handle->rx_dma_desc + handle->rx_index_emac_v2;
 
     if (bflb_emac_v2_is_desc_owned_by_dma(rxdesc)) {
         return -1;
@@ -1887,7 +1928,7 @@ int bflb_emac_v2_get_rx_qptr(struct bflb_device_s *dev, uint32_t *status, uint32
         *data2 = rxdesc->data2;
     }
 
-    thiz->rx_index_emac_v2 = bflb_emac_v2_is_last_rx_desc(rxdesc) ? 0 : rxnext + 1;
+    handle->rx_index_emac_v2 = bflb_emac_v2_is_last_rx_desc(rxdesc) ? 0 : rxnext + 1;
 #if 1
     /* rxdesc should be recoveried by CPU RX thread when data is processed */
     bflb_emac_v2_rx_dma_desc_init(rxdesc, bflb_emac_v2_is_last_rx_desc(rxdesc));
@@ -1895,7 +1936,7 @@ int bflb_emac_v2_get_rx_qptr(struct bflb_device_s *dev, uint32_t *status, uint32
     //rxdesc->status |= EMAC_V2_DESC_OWN_BY_DMA;
 #endif
     /* idle rx descriptor is reduced by one as it will be handed over to CPU */
-    (thiz->rx_idle_cnt)--;
+    (handle->rx_idle_cnt)--;
 
     return rxnext;
 }
@@ -2146,10 +2187,11 @@ int bflb_emac_v2_resume_dma_rx(struct bflb_device_s *dev)
  */
 int bflb_emac_v2_take_desc_ownership_rx(struct bflb_device_s *dev)
 {
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
     int i;
 
-    for (i = 0; i < thiz->rx_index_cnt; i++) {
-        bflb_emac_v2_take_desc_ownership((thiz->rx_dma_desc + i));
+    for (i = 0; i <= handle->rx_index_cnt; i++) {
+        bflb_emac_v2_take_desc_ownership((handle->rx_dma_desc + i));
     }
 
     return 0;
@@ -2166,10 +2208,11 @@ int bflb_emac_v2_take_desc_ownership_rx(struct bflb_device_s *dev)
  */
 int bflb_emac_v2_take_desc_ownership_tx(struct bflb_device_s *dev)
 {
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
     int i;
 
-    for (i = 0; i < thiz->tx_index_cnt; i++) {
-        bflb_emac_v2_take_desc_ownership((thiz->tx_dma_desc + i));
+    for (i = 0; i <= handle->tx_index_cnt; i++) {
+        bflb_emac_v2_take_desc_ownership((handle->tx_dma_desc + i));
     }
 
     return 0;
@@ -3298,6 +3341,13 @@ int bflb_emac_v2_dma_ctrl_init(struct bflb_device_s *dev)
  */
 int bflb_emac_init(struct bflb_device_s *dev, const struct bflb_emac_config_s *config)
 {
+    struct bflb_emac_v2_ctx_s *ctx = bflb_emac_v2_ctx_from_dev(dev);
+    uintptr_t irq_flags;
+    int ret;
+
+    ctx->dev = dev;
+    arch_memset(&ctx->handle, 0, sizeof(ctx->handle));
+
     bflb_emac_v2_reset(dev);
 
     /* set mac address */
@@ -3400,17 +3450,42 @@ int bflb_emac_init(struct bflb_device_s *dev, const struct bflb_emac_config_s *c
     putreg32(regval, GLB_EMAC_CLK_OUT_ADDRESS);
 
 #if 1
-    bflb_emac_v2_dma_desc_init(dev, tx_dma_desc, NULL, EMAC_TX_BD_NUM_MAX,
-                               rx_dma_desc, NULL, EMAC_RX_BD_NUM_MAX);
+    ret = bflb_emac_v2_dma_desc_init(dev, tx_dma_desc[dev->idx], NULL, EMAC_TX_BD_NUM_MAX,
+                                     rx_dma_desc[dev->idx], NULL, EMAC_RX_BD_NUM_MAX);
 #else
-    bflb_emac_v2_dma_desc_init(dev, tx_dma_desc, (uint8_t *)ethTxBuff, EMAC_TX_BD_NUM_MAX,
-                               rx_dma_desc, NULL, EMAC_RX_BD_NUM_MAX);
+    ret = bflb_emac_v2_dma_desc_init(dev, tx_dma_desc[dev->idx], (uint8_t *)ethTxBuff, EMAC_TX_BD_NUM_MAX,
+                                     rx_dma_desc[dev->idx], NULL, EMAC_RX_BD_NUM_MAX);
 #endif
-    bflb_emac_v2_start_pre(dev);
+    if (ret != 0) {
+        return ret;
+    }
+
+    irq_flags = bflb_irq_save();
 #ifndef NOT_USE_BFLB_LHAL_IRQ_ATTACH
-    bflb_irq_attach(dev->irq_num, bflb_emac_v2_isr, dev);
-    bflb_irq_enable(dev->irq_num);
+    if (emac_v2_active_mask == 0) {
+        bflb_irq_disable(dev->irq_num);
+        ret = bflb_irq_attach(dev->irq_num, bflb_emac_v2_shared_isr, NULL);
+        if (ret != 0) {
+            bflb_irq_restore(irq_flags);
+            return ret;
+        }
+        emac_v2_shared_irq_num = dev->irq_num;
+    } else if (emac_v2_shared_irq_num != dev->irq_num) {
+        bflb_irq_restore(irq_flags);
+        return -EINVAL;
+    }
 #endif
+
+    bflb_emac_v2_start_pre(dev);
+    ctx->initialized = true;
+    emac_v2_active_mask |= (1U << dev->idx);
+#ifndef NOT_USE_BFLB_LHAL_IRQ_ATTACH
+    if (emac_v2_active_mask == (1U << dev->idx)) {
+        bflb_irq_enable(emac_v2_shared_irq_num);
+    }
+#endif
+    bflb_irq_restore(irq_flags);
+
     return 0;
 }
 
@@ -3420,8 +3495,37 @@ int bflb_emac_init(struct bflb_device_s *dev, const struct bflb_emac_config_s *c
  * @param dev
  *
  */
-void bflb_emac_v2_deinit(struct bflb_device_s *dev)
+int bflb_emac_deinit(struct bflb_device_s *dev)
 {
+    struct bflb_emac_v2_ctx_s *ctx = bflb_emac_v2_ctx_from_dev(dev);
+    uintptr_t irq_flags;
+
+    irq_flags = bflb_irq_save();
+
+    bflb_emac_v2_disable_interrupt_all(dev);
+    bflb_emac_v2_tx_disable(dev);
+    bflb_emac_v2_rx_disable(dev);
+    bflb_emac_v2_disable_dma_tx(dev);
+    bflb_emac_v2_disable_dma_rx(dev);
+    bflb_emac_v2_clear_interrupt(dev, EMAC_V2_INT_ENABLE_CFG);
+
+    ctx->irq_event_cb = NULL;
+    ctx->irq_arg = NULL;
+    ctx->initialized = false;
+    emac_v2_active_mask &= ~(1U << dev->idx);
+    if (emac_v2_active_mask == 0) {
+#ifndef NOT_USE_BFLB_LHAL_IRQ_ATTACH
+        bflb_irq_disable(emac_v2_shared_irq_num);
+        bflb_irq_detach(emac_v2_shared_irq_num);
+#endif
+        emac_v2_shared_irq_num = 0xff;
+    }
+
+    arch_memset(&ctx->handle, 0, sizeof(ctx->handle));
+    ctx->dev = NULL;
+    bflb_irq_restore(irq_flags);
+
+    return 0;
 }
 
 /**
@@ -3457,6 +3561,9 @@ void bflb_emac_v2_start_pre(struct bflb_device_s *dev)
  */
 int bflb_emac_v2_handle_transmit_over(struct bflb_device_s *dev)
 {
+    struct bflb_emac_v2_ctx_s *ctx = bflb_emac_v2_ctx_from_dev(dev);
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
+
     int32_t desc_index;
     uint32_t data1, data2;
     uint32_t status = 0;
@@ -3497,23 +3604,25 @@ int bflb_emac_v2_handle_transmit_over(struct bflb_device_s *dev)
             }
 #endif
             if (bflb_emac_v2_is_desc_valid(status)) {
-                thiz->tx_bytes += length1;
-                thiz->tx_packets++;
+                handle->tx_bytes += length1;
+                handle->tx_packets++;
             } else {
                 EMAC_V2_DRV_ERR("Error in Status %08x\r\n", status);
-                thiz->tx_errors++;
-                thiz->tx_aborted_errors += bflb_emac_v2_is_tx_aborted(status);
-                thiz->tx_carrier_errors += bflb_emac_v2_is_tx_carrier_error(status);
+                handle->tx_errors++;
+                handle->tx_aborted_errors += bflb_emac_v2_is_tx_aborted(status);
+                handle->tx_carrier_errors += bflb_emac_v2_is_tx_carrier_error(status);
                 tx_desc.err_status |= EMAC_TX_STA_ERR_UNKNOWN;
             }
             /* callback */
-            if (tx_desc.err_status) {
-                emac_irq_event_cb(emac_irq_arg, EMAC_IRQ_EVENT_TX_ERR_FRAME, &tx_desc);
-            } else {
-                emac_irq_event_cb(emac_irq_arg, EMAC_IRQ_EVENT_TX_FRAME, &tx_desc);
+            if (ctx->irq_event_cb != NULL) {
+                if (tx_desc.err_status) {
+                    ctx->irq_event_cb(ctx->irq_arg, EMAC_IRQ_EVENT_TX_ERR_FRAME, &tx_desc);
+                } else {
+                    ctx->irq_event_cb(ctx->irq_arg, EMAC_IRQ_EVENT_TX_FRAME, &tx_desc);
+                }
             }
         }
-        thiz->collisions += bflb_emac_v2_get_tx_collision_count(status);
+        handle->collisions += bflb_emac_v2_get_tx_collision_count(status);
     } while (1);
 
     return 0;
@@ -3529,8 +3638,10 @@ int bflb_emac_v2_handle_transmit_over(struct bflb_device_s *dev)
  */
 int bflb_emac_v2_bd_tx_enqueue(struct bflb_device_s *dev, uint32_t flags, uint32_t len, const uint8_t *data_in)
 {
-    int txnext = thiz->tx_index_cpu;
-    struct bflb_emac_v2_dma_desc_s *txdesc = thiz->tx_dma_desc + txnext;
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
+
+    int txnext = handle->tx_index_cpu;
+    struct bflb_emac_v2_dma_desc_s *txdesc = handle->tx_dma_desc + txnext;
     uint32_t length1 = len;
     uint32_t length2 = 0;
     int offload_needed = 0;
@@ -3546,7 +3657,7 @@ int bflb_emac_v2_bd_tx_enqueue(struct bflb_device_s *dev, uint32_t flags, uint32
     }
 
     /* busy tx descriptor is incremented by one as it will be handed over to DMA */
-    (thiz->tx_busy_cnt)++;
+    (handle->tx_busy_cnt)++;
 
     txdesc->length |= (((length1 << EMAC_V2_DESC_SIZE1_SHIFT) & EMAC_V2_DESC_SIZE1_MASK) | ((length2 << EMAC_V2_DESC_SIZE2_SHIFT) & EMAC_V2_DESC_SIZE2_MASK));
     txdesc->status |= (EMAC_V2_DESC_TX_FIRST | EMAC_V2_DESC_TX_LAST | EMAC_V2_DESC_TX_INT_ENABLE | EMAC_V2_DESC_TX_TS_ENABLE);
@@ -3579,7 +3690,7 @@ int bflb_emac_v2_bd_tx_enqueue(struct bflb_device_s *dev, uint32_t flags, uint32
         bflb_emac_v2_resume_dma_tx(dev);
     }
 
-    thiz->tx_index_cpu = bflb_emac_v2_is_last_tx_desc(txdesc) ? 0 : txnext + 1;
+    handle->tx_index_cpu = bflb_emac_v2_is_last_tx_desc(txdesc) ? 0 : txnext + 1;
 
     //return txnext;
     return 0;
@@ -3599,6 +3710,8 @@ int bflb_emac_v2_bd_rx_dequeue(struct bflb_device_s *dev, uint32_t flags, uint32
 int bflb_emac_v2_bd_rx_dequeue(struct bflb_device_s *dev, uint32_t flags, uint32_t *len, uint8_t **data_out)
 #endif
 {
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
+
     //uint32_t data1;
     //uint32_t data2;
     uint32_t status;
@@ -3613,8 +3726,8 @@ int bflb_emac_v2_bd_rx_dequeue(struct bflb_device_s *dev, uint32_t flags, uint32
     uint32_t *p_timestamp = NULL;
 #endif
 
-    int rxnext = thiz->rx_index_emac_v2;
-    struct bflb_emac_v2_dma_desc_s *rxdesc = thiz->rx_dma_desc + thiz->rx_index_emac_v2;
+    int rxnext = handle->rx_index_emac_v2;
+    struct bflb_emac_v2_dma_desc_s *rxdesc = handle->rx_dma_desc + handle->rx_index_emac_v2;
 
     *len = 0;
     if (bflb_emac_v2_is_desc_owned_by_dma(rxdesc)) {
@@ -3726,8 +3839,8 @@ int bflb_emac_v2_bd_rx_dequeue(struct bflb_device_s *dev, uint32_t flags, uint32
 #endif
         }
 #endif
-        thiz->rx_packets++;
-        thiz->rx_bytes += *len;
+        handle->rx_packets++;
+        handle->rx_bytes += *len;
 
         /* copy data or get buffer pointer */
         if (data_out) {
@@ -3740,21 +3853,21 @@ int bflb_emac_v2_bd_rx_dequeue(struct bflb_device_s *dev, uint32_t flags, uint32
     } else {
         /* descriptor is invalid*/
         EMAC_V2_DRV_ERR("RX descriptor is invalid\r\n");
-        thiz->rx_errors++;
-        thiz->collisions += bflb_emac_v2_is_rx_frame_collision(status);
-        thiz->rx_crc_errors += bflb_emac_v2_is_rx_crc(status);
-        thiz->rx_frame_errors += bflb_emac_v2_is_frame_dribbling_errors(status);
-        thiz->rx_length_errors += bflb_emac_v2_is_rx_frame_length_errors(status);
+        handle->rx_errors++;
+        handle->collisions += bflb_emac_v2_is_rx_frame_collision(status);
+        handle->rx_crc_errors += bflb_emac_v2_is_rx_crc(status);
+        handle->rx_frame_errors += bflb_emac_v2_is_frame_dribbling_errors(status);
+        handle->rx_length_errors += bflb_emac_v2_is_rx_frame_length_errors(status);
     }
 
     /* move to next one*/
-    thiz->rx_index_emac_v2 = bflb_emac_v2_is_last_rx_desc(rxdesc) ? 0 : rxnext + 1;
+    handle->rx_index_emac_v2 = bflb_emac_v2_is_last_rx_desc(rxdesc) ? 0 : rxnext + 1;
     bflb_emac_v2_rx_dma_desc_init(rxdesc, bflb_emac_v2_is_last_rx_desc(rxdesc));
     rxdesc->length |= ((ETH_RX_BUFFER_SIZE << EMAC_V2_DESC_SIZE1_SHIFT) & EMAC_V2_DESC_SIZE1_MASK);
     rxdesc->status |= EMAC_V2_DESC_OWN_BY_DMA;
 
     /* idle rx descriptor is reduced by one as it will be handed over to CPU */
-    (thiz->rx_idle_cnt)--;
+    (handle->rx_idle_cnt)--;
 
     //return rxnext;
     return 0;
@@ -4037,6 +4150,7 @@ int bflb_emac_md_write(struct bflb_device_s *dev, uint8_t phy_addr, uint16_t phy
  */
 int bflb_emac_feature_control(struct bflb_device_s *dev, int cmd, size_t arg)
 {
+    struct bflb_emac_v2_handle_s *handle = bflb_emac_v2_handle_from_dev(dev);
     int ret = 0;
     uint32_t reg_val;
     uint32_t reg_base;
@@ -4077,20 +4191,20 @@ int bflb_emac_feature_control(struct bflb_device_s *dev, int cmd, size_t arg)
             break;
 
         case EMAC_CMD_GET_TX_DB_AVAILABLE:
-            if (thiz == NULL) {
+            if (handle->tx_dma_desc == NULL) {
                 ret = 0;
             } else {
-                uint16_t tx_desc_cnt = (uint16_t)(thiz->tx_index_cnt + 1);
-                ret = (thiz->tx_busy_cnt >= tx_desc_cnt) ? 0 : (tx_desc_cnt - thiz->tx_busy_cnt);
+                uint16_t tx_desc_cnt = (uint16_t)(handle->tx_index_cnt + 1);
+                ret = (handle->tx_busy_cnt >= tx_desc_cnt) ? 0 : (tx_desc_cnt - handle->tx_busy_cnt);
             }
             break;
 
         case EMAC_CMD_GET_RX_DB_AVAILABLE:
-            if (thiz == NULL) {
+            if (handle->rx_dma_desc == NULL) {
                 ret = 0;
             } else {
-                uint16_t rx_desc_cnt = (uint16_t)(thiz->rx_index_cnt + 1);
-                ret = (thiz->rx_idle_cnt >= rx_desc_cnt) ? 0 : (rx_desc_cnt - thiz->rx_idle_cnt);
+                uint16_t rx_desc_cnt = (uint16_t)(handle->rx_index_cnt + 1);
+                ret = (handle->rx_idle_cnt >= rx_desc_cnt) ? 0 : (rx_desc_cnt - handle->rx_idle_cnt);
             }
             break;
         default:
@@ -4103,26 +4217,27 @@ int bflb_emac_feature_control(struct bflb_device_s *dev, int cmd, size_t arg)
 /* isr callback attach */
 int bflb_emac_irq_attach(struct bflb_device_s *dev, bflb_emac_irq_cb_t irq_event_cb, void *arg)
 {
-    emac_irq_event_cb = irq_event_cb;
-    emac_irq_arg = arg;
+    struct bflb_emac_v2_ctx_s *ctx = bflb_emac_v2_ctx_from_dev(dev);
+    uintptr_t irq_flags;
+
+    irq_flags = bflb_irq_save();
+    ctx->irq_event_cb = irq_event_cb;
+    ctx->irq_arg = arg;
+    bflb_irq_restore(irq_flags);
 
     return 0;
 }
 
-void bflb_emac_v2_isr(int irq, void *arg)
+static void bflb_emac_v2_handle_irq(struct bflb_emac_v2_ctx_s *ctx)
 {
-    uint32_t dma_status_reg;
     uint32_t interrupt;
-    struct bflb_device_s *emac_v2_dev = (struct bflb_device_s *)arg;
+    struct bflb_device_s *emac_v2_dev;
     uint32_t status;
     uint32_t ext_status;
 
-    EMAC_V2_DRV_DBG("emac int come\r\n");
+    emac_v2_dev = ctx->dev;
 
-    dma_status_reg = bflb_emac_v2_get_interrupt_status(emac_v2_dev);
-    if (dma_status_reg == 0) {
-        return;
-    }
+    EMAC_V2_DRV_DBG("emac int come\r\n");
 
     bflb_emac_v2_disable_interrupt_all(emac_v2_dev);
 
@@ -4135,7 +4250,6 @@ void bflb_emac_v2_isr(int irq, void *arg)
 
         bflb_emac_v2_take_desc_ownership_tx(emac_v2_dev);
         bflb_emac_v2_take_desc_ownership_rx(emac_v2_dev);
-        //bflb_emac_v2_init_tx_rx_desc_queue(emac_v2x);
         bflb_emac_v2_reset(emac_v2_dev);
         EMAC_V2_DRV_ERR("EMAC_V2 DMA BUS Error\r\n");
     }
@@ -4184,15 +4298,14 @@ void bflb_emac_v2_isr(int irq, void *arg)
                     EMAC_V2_DRV_DBG("Payload type=%d\r\n", (ext_status & EMAC_V2_EDESC_RX_IP_PAYLOAD_TYPE));
                 }
                 rx_desc.data_len = bflb_emac_v2_get_rx_desc_frame_length(status) - 4;
-                if (emac_irq_event_cb != NULL) {
-                    emac_irq_event_cb(emac_irq_arg, EMAC_IRQ_EVENT_RX_FRAME, &rx_desc);
+                if (ctx->irq_event_cb != NULL) {
+                    ctx->irq_event_cb(ctx->irq_arg, EMAC_IRQ_EVENT_RX_FRAME, &rx_desc);
                 } else {
                     EMAC_V2_DRV_ERR("IRQ callback not register!!!!!\r\n");
                 }
             } else {
                 EMAC_V2_DRV_WARN("!!!!!!!!!!!!!!!!RX descriptor is invalid, status=%08x\r\n", status);
             }
-            //bflb_emac_v2_set_rx_qptr(emac_v2_dev, (uint32_t)rx_desc.buff_addr, ETH_RX_BUFFER_SIZE, 0,0, 0, 0);
         }
     }
 
@@ -4224,19 +4337,46 @@ void bflb_emac_v2_isr(int irq, void *arg)
         bflb_emac_v2_enable_dma_tx(emac_v2_dev);
         EMAC_V2_DRV_WARN("EMAC_V2 DMA TX Stopped Error\r\n");
     }
+
     bflb_emac_v2_enable_interrupt(emac_v2_dev, EMAC_V2_INT_ENABLE_CFG);
+}
+
+static void bflb_emac_v2_shared_isr(int irq, void *arg)
+{
+    uint32_t dma_status;
+
+    (void)irq;
+    (void)arg;
+
+    for (uint32_t i = 0; i < EMAC_V2_DEVICE_COUNT; i++) {
+        struct bflb_emac_v2_ctx_s *ctx = &emac_v2_contexts[i];
+
+        if (!ctx->initialized || ctx->dev == NULL) {
+            continue;
+        }
+
+        dma_status = bflb_emac_v2_get_interrupt_status(ctx->dev);
+        if ((dma_status & EMAC_V2_INT_ENABLE_CFG) == 0) {
+            continue;
+        }
+
+        bflb_emac_v2_handle_irq(ctx);
+    }
 }
 
 int bflb_emac_queue_rx_push(struct bflb_device_s *dev, struct bflb_emac_trans_desc_s *rx_desc)
 {
-    /* lock */
-    uintptr_t flag = bflb_irq_save();
+    uintptr_t flag;
+    int desc_index;
 
-    bflb_emac_v2_set_rx_qptr(dev, (uint32_t)rx_desc->buff_addr, ETH_RX_BUFFER_SIZE, 0, 0, 0, 0);
-    /* unlock */
+    flag = bflb_irq_save();
+    desc_index = bflb_emac_v2_set_rx_qptr(dev, (uint32_t)(uintptr_t)rx_desc->buff_addr,
+                                          ETH_RX_BUFFER_SIZE, 0, 0, 0, 0);
     bflb_irq_restore(flag);
 
-    return 0;
+    /* The common queue API returns 0 on success, while the v2 helper returns
+     * the allocated descriptor index (0..N-1). Preserve only real errors. */
+    return desc_index < 0 ? desc_index : 0;
 }
 
 int bflb_emac_queue_tx_push(struct bflb_device_s *dev, struct bflb_emac_trans_desc_s *tx_desc)
